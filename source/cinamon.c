@@ -8,6 +8,77 @@ typedef int b32;
 #define true 1
 #define false 0
 
+typedef struct {
+	unsigned char* data;
+	int size;
+	int capacity;
+	int item_size;
+} array;
+
+array new_array(void* memory, int memory_size, int item_size) {
+	assert(memory);
+	assert(memory_size);
+	assert(item_size);
+
+	return (array){ .data = (unsigned char*)memory, .item_size = item_size, .capacity = memory_size / item_size };
+}
+
+array malloc_array(int item_size, int items_count) {
+	int array_data_size = item_size * items_count;
+	unsigned char* array_data = malloc(array_data_size);
+	assert(array_data);
+	array result = new_array(array_data, array_data_size, item_size);
+	assert(result.capacity == items_count);
+	return result;
+}
+
+void free_array(array* arr) {
+	free(arr->data);
+	*arr = (array){0};
+}
+
+void assert_array_valid(array* arr) {
+	assert(arr);
+	assert(arr->data);
+	assert(arr->capacity);
+	assert(arr->item_size);
+	assert(arr->size <= arr->capacity);
+}
+
+void* arr_push(array* arr) {
+	assert_array_valid(arr);
+	assert(arr->size < arr->capacity);
+	void* new_item_ptr = arr->data + arr->size * arr->item_size;
+	++arr->size;
+	return new_item_ptr;
+}
+
+void arr_clear(array* arr) {
+	assert_array_valid(arr);
+	arr->size = 0;
+}
+
+void* arr_get(array* arr, int i) {
+	assert_array_valid(arr);
+	assert(i < arr->size);
+	return arr->data + arr->item_size * i;
+}
+
+#define arr_foreach(arr, type, body) \
+	{ for (int _foreach_ctr = 0; _foreach_ctr < (arr)->size; ++_foreach_ctr) { \
+		type* it = arr_get((arr), _foreach_ctr); \
+		{ body } \
+	}}
+
+void arr_copy(array* dst, array* src) {
+	assert_array_valid(dst);
+	assert_array_valid(src);
+	assert(dst->item_size == src->item_size);
+	assert(dst->capacity >= src->size);
+	memcpy(dst->data, src->data, src->size * src->item_size);
+	dst->size = src->size;
+}
+
 char* load_text_file(const char* path) {
 	FILE* file = fopen(path, "rb");
 	if (!file)
@@ -219,9 +290,73 @@ token next_token(source_ctx* ctx) {
 	return tk;
 }
 
+token require_token(source_ctx* ctx, token_type required_type) {
+	token tk = next_token(ctx);
+	assert(tk.type == required_type);
+	return tk;
+}
+
+typedef enum {
+	VT_S32,
+	VT_U32,
+	VT_STRUCT,
+} VARIABLE_TYPE;
+
+typedef struct {
+	VARIABLE_TYPE type;
+	string struct_name;
+} data_type;
+
+typedef struct {
+	data_type type;
+	string name;
+} variable;
+
+typedef struct {
+	string name;
+	array parameters;
+} function;
+
+#define MAX_FUNCTIONS 1024
+#define MAX_FUNCTION_PARAMETERS 64
+
+function* construct_function(function* f) {
+	f->name = (string){0};
+	f->parameters = malloc_array(sizeof(variable), MAX_FUNCTION_PARAMETERS);
+	return f;
+}
+
+typedef enum {
+	ST_FN_CALL,
+} statement_type;
+
+typedef struct {
+	statement_type type;
+} statement;
+
+typedef enum {
+	RV_STRING
+} rv_type;
+
+typedef struct {
+	rv_type type;
+	void* data;
+} rvalue;
+
+typedef struct {
+	string name;
+} fn_call_param;
+
+typedef struct {
+	statement st;
+	array parameters;
+} fn_call;
+
 int main(int argc, char** argv) {
 	char* source = load_text_file("test.cn");
 	assert(source);
+
+	array functions = malloc_array(sizeof(function), MAX_FUNCTIONS);
 
 	source_ctx ctx = { .source = source, .at = source, .iline = 0, .icol = 0 };
 	token tk;
@@ -230,6 +365,32 @@ int main(int argc, char** argv) {
 		printf("%3d:%-3d %-15s %.*s\n", tk.iline + 1, tk.icol + 1, get_token_type_str(tk.type),
 				tk.str.len, tk.str.at);
 	} while (tk.type != TK_EOF);
+
+	ctx = (source_ctx){ .source = source, .at = source, .iline = 0, .icol = 0 };
+	do {
+		tk = next_token(&ctx);
+		if (tk.type == TK_FN) {
+			tk = require_token(&ctx, TK_IDENTIFIER);
+			function* f = construct_function(arr_push(&functions));
+			f->name = tk.str;
+
+			require_token(&ctx, TK_LPAREN);
+			tk = next_token(&ctx);
+			while (tk.type != TK_RPAREN) {
+				// TODO: load parameters
+			}
+
+			require_token(&ctx, TK_LBRACE);
+			tk = next_token(&ctx);
+			while (tk.type != TK_RBRACE) {
+				// TODO: load function body
+			}
+		}
+	} while (tk.type != TK_EOF);
+
+	arr_foreach(&functions, function, {
+		printf("fn %.*s()\n", it->name.len, it->name.at);
+	});
 
 	return 0;
 }
