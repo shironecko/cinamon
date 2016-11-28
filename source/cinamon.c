@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include <assert.h>
 
+#define STB_DEFINE
+#define STB_NO_REGISTRY
+#pragma warning(push, 0)
+#include "stb.h"
+#pragma warning(pop)
+
 typedef int8_t s8;
 typedef int16_t s16;
 typedef int32_t s32;
