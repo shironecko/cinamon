@@ -75,11 +75,13 @@ void* arr_get(array* arr, int i) {
 	return arr->data + arr->item_size * i;
 }
 
-#define arr_foreach(arr, type, body) \
+#define arr_foreach(arr, type, it_name, body) \
 	{ for (int _foreach_ctr = 0; _foreach_ctr < (arr)->size; ++_foreach_ctr) { \
-		type* it = arr_get((arr), _foreach_ctr); \
+		type* it_name = arr_get((arr), _foreach_ctr); \
 		{ body } \
 	}}
+
+#define arr_foreach_islast(arr) ((_foreach_ctr) == ((arr)->size - 1))
 
 void arr_copy(array* dst, array* src) {
 	assert_array_valid(dst);
@@ -191,6 +193,7 @@ typedef enum {
 	TK_FN,
 	TK_STRUCT,
 	TK_ENUM,
+	TK_STRING,
 	TK_LBRACE,
 	TK_RBRACE,
 	TK_LPAREN,
@@ -217,6 +220,8 @@ const char* get_token_type_str(token_type type) {
 			return "TK_STRUCT";
 		case TK_ENUM:
 			return "TK_ENUM";
+		case TK_STRING:
+			return "TK_STRING";
 		case TK_LBRACE:
 			return "TK_LBRACE";
 		case TK_RBRACE:
@@ -283,13 +288,20 @@ token next_token(source_ctx* ctx) {
 		tk.type = TK_COMMA;
 	} else if (*sym.at == '#') {
 		tk.type = TK_HASH;
+	} else if (*sym.at == '"') {
+		tk.type = TK_STRING;
+		symbol s;
+		s = forward(ctx);
+		tk.str.at = s.at;
+		while (*s.at != '"') { s = forward(ctx); } 
+		tk.str.len = s.at - sym.at - 1;
 	} else if (is_identifier_first_sym(*sym.at)) {
+		tk.type = TK_IDENTIFIER;
 		symbol s;
 		do { s = forward(ctx); } while (is_identifier_sym(*s.at));
 		tk.str.len = s.at - sym.at;
 		forward_before_returning = false;
 
-		tk.type = TK_IDENTIFIER;
 		if (!strncmp(tk.str.at, "fn", tk.str.len)) {
 			tk.type = TK_FN;
 		} else if (!strncmp(tk.str.at, "struct", tk.str.len)) {
@@ -342,6 +354,21 @@ typedef enum {
 	ST_CALL,
 } STATEMENT_TYPE;
 
+const char* get_statement_type_str(STATEMENT_TYPE type) {
+	switch (type) {
+		case ST_LITERAL_STR:
+			return "ST_LITERAL_STR";
+		case ST_LITERAL_S32:
+			return "ST_LITERAL_S32";
+		case ST_LITERAL_U32:
+			return "ST_LITERAL_U32";
+		case ST_CALL:
+			return "ST_CALL";
+	};
+
+	return "{unexpected statement type}";
+}
+
 typedef struct {
 	STATEMENT_TYPE type;
 
@@ -351,7 +378,7 @@ typedef struct {
 		string value_str;
 
 		struct {
-			function* fn;
+			string fn_name;
 			array parameters;
 		} value_call;
 	};
@@ -368,6 +395,18 @@ function* construct_function(function* f) {
 	return f;
 }
 
+statement* add_statement(function* f, STATEMENT_TYPE type) {
+	statement* result = arr_push(&f->statements);
+	*result = (statement){0};
+	result->type = type;
+
+	if (type == ST_CALL) {
+		result->value_call.parameters = malloc_array(sizeof(statement), MAX_FUNCTION_PARAMETERS);
+	}
+
+	return result;
+}
+
 int main(int argc, char** argv) {
 	char* source = load_text_file("test.cn");
 	assert(source);
@@ -376,11 +415,13 @@ int main(int argc, char** argv) {
 
 	source_ctx ctx = { .source = source, .at = source, .iline = 0, .icol = 0 };
 	token tk;
+#if 0
 	do {
 		tk = next_token(&ctx);
 		printf("%3d:%-3d %-15s %.*s\n", tk.iline + 1, tk.icol + 1, get_token_type_str(tk.type),
 				tk.str.len, tk.str.at);
 	} while (tk.type != TK_EOF);
+#endif
 
 	ctx = (source_ctx){ .source = source, .at = source, .iline = 0, .icol = 0 };
 	do {
@@ -391,36 +432,74 @@ int main(int argc, char** argv) {
 			if (tk.type == TK_COLON) { // declaration of something
 				tk = next_token(&ctx);
 				switch (tk.type) {
-				case TK_FN: {
-					function* f = construct_function(arr_push(&functions));
-					f->name = id_token.str;
+					case TK_FN: { // function
+						function* f = construct_function(arr_push(&functions));
+						f->name = id_token.str;
 
-					tk = require_token(&ctx, TK_LPAREN);
-					do {
-						tk = next_token(&ctx);
-						// TODO: parameters parsing
-					} while (tk.type != TK_RPAREN);
+						tk = require_token(&ctx, TK_LPAREN);
+						do { // parameters
+							tk = next_token(&ctx);
+							// TODO: parameters parsing
+						} while (tk.type != TK_RPAREN);
 
-					tk = require_token(&ctx, TK_LBRACE);
-					do {
-						tk = next_token(&ctx);
-						// TODO: fn body parsing
-					} while (tk.type != TK_RBRACE);
-				} break;
-				case TK_STRUCT: {
-				} break;
-				case TK_ENUM: {
-				} break;
-				default: {
-					assert(0 && "unexpected type!");
-				} break;
+						tk = require_token(&ctx, TK_LBRACE);
+						do { // body
+							tk = next_token(&ctx);
+							if (tk.type == TK_IDENTIFIER) {
+								token st_id = tk;
+								tk = next_token(&ctx);
+								if (tk.type == TK_LPAREN) { // fn call
+									statement* call = add_statement(f, ST_CALL);
+									call->value_call.fn_name = st_id.str;
+									do { // parameters
+										tk = next_token(&ctx);
+										if (tk.type == TK_STRING) {
+											statement* str_param = arr_push(&call->value_call.parameters);
+											str_param->type = ST_LITERAL_STR;
+											str_param->value_str = tk.str;
+										}
+
+										if (tk.type == TK_COMMA) { tk = next_token(&ctx); }
+									} while (tk.type != TK_RPAREN);
+
+									// TODO: add support for compound statements
+									require_token(&ctx, TK_SEMICOLON);
+								}
+							}
+						} while (tk.type != TK_RBRACE);
+					} break;
+					case TK_STRUCT: {
+					} break;
+					case TK_ENUM: {
+					} break;
+					default: {
+						assert(0 && "unexpected type!");
+					} break;
 				}
 			}
 		}
 	} while (tk.type != TK_EOF);
 
-	arr_foreach(&functions, function, {
-		printf("%.*s : fn()\n", it->name.len, it->name.at);
+	arr_foreach(&functions, function, fn, {
+		printf("%.*s : fn()\n", fn->name.len, fn->name.at);
+		arr_foreach(&fn->statements, statement, st, {
+			switch (st->type) {
+				case ST_CALL: {
+					printf("\t%.*s(", st->value_call.fn_name.len, st->value_call.fn_name.at);
+					arr_foreach(&st->value_call.parameters, statement, param, {
+						switch (param->type) {
+							case ST_LITERAL_STR: {
+								printf("\"%.*s\"", param->value_str.len, param->value_str.at);
+								if (!arr_foreach_islast(&st->value_call.parameters)) {
+									printf(", ");
+								}
+							} break;
+						};
+					});
+					printf(");\n");
+				} break;
+			}
+		});
 	});
 
 	return 0;
