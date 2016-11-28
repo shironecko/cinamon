@@ -1,9 +1,20 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include <assert.h>
 
-typedef int b32;
+typedef int8_t s8;
+typedef int16_t s16;
+typedef int32_t s32;
+typedef int64_t s64;
+
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
+
+typedef u32 b32;
 
 #define true 1
 #define false 0
@@ -178,7 +189,8 @@ typedef enum {
 	TK_EOF = 0,
 	TK_IDENTIFIER,
 	TK_FN,
-	TK_LET,
+	TK_STRUCT,
+	TK_ENUM,
 	TK_LBRACE,
 	TK_RBRACE,
 	TK_LPAREN,
@@ -201,8 +213,10 @@ const char* get_token_type_str(token_type type) {
 			return "TK_IDENTIFIER";
 		case TK_FN:
 			return "TK_FN";
-		case TK_LET:
-			return "TK_LET";
+		case TK_STRUCT:
+			return "TK_STRUCT";
+		case TK_ENUM:
+			return "TK_ENUM";
 		case TK_LBRACE:
 			return "TK_LBRACE";
 		case TK_RBRACE:
@@ -278,8 +292,10 @@ token next_token(source_ctx* ctx) {
 		tk.type = TK_IDENTIFIER;
 		if (!strncmp(tk.str.at, "fn", tk.str.len)) {
 			tk.type = TK_FN;
-		} else if (!strncmp(tk.str.at, "let", tk.str.len)) {
-			tk.type = TK_LET;
+		} else if (!strncmp(tk.str.at, "struct", tk.str.len)) {
+			tk.type = TK_STRUCT;
+		} else if (!strncmp(tk.str.at, "enum", tk.str.len)) {
+			tk.type = TK_ENUM;
 		}
 	}
 
@@ -300,6 +316,7 @@ typedef enum {
 	VT_S32,
 	VT_U32,
 	VT_STRUCT,
+	VT_ENUM,
 } VARIABLE_TYPE;
 
 typedef struct {
@@ -315,42 +332,41 @@ typedef struct {
 typedef struct {
 	string name;
 	array parameters;
+	array statements;
 } function;
 
+typedef enum {
+	ST_LITERAL_STR,
+	ST_LITERAL_S32,
+	ST_LITERAL_U32,
+	ST_CALL,
+} STATEMENT_TYPE;
+
+typedef struct {
+	STATEMENT_TYPE type;
+
+	union {
+		s32 value_s32;
+		u32 value_u32;
+		string value_str;
+
+		struct {
+			function* fn;
+			array parameters;
+		} value_call;
+	};
+} statement;
+
 #define MAX_FUNCTIONS 1024
+#define MAX_FUNCTION_STATEMENTS (1024 * 1024)
 #define MAX_FUNCTION_PARAMETERS 64
 
 function* construct_function(function* f) {
 	f->name = (string){0};
 	f->parameters = malloc_array(sizeof(variable), MAX_FUNCTION_PARAMETERS);
+	f->statements = malloc_array(sizeof(statement), MAX_FUNCTION_STATEMENTS);
 	return f;
 }
-
-typedef enum {
-	ST_FN_CALL,
-} statement_type;
-
-typedef struct {
-	statement_type type;
-} statement;
-
-typedef enum {
-	RV_STRING
-} rv_type;
-
-typedef struct {
-	rv_type type;
-	void* data;
-} rvalue;
-
-typedef struct {
-	string name;
-} fn_call_param;
-
-typedef struct {
-	statement st;
-	array parameters;
-} fn_call;
 
 int main(int argc, char** argv) {
 	char* source = load_text_file("test.cn");
@@ -369,27 +385,42 @@ int main(int argc, char** argv) {
 	ctx = (source_ctx){ .source = source, .at = source, .iline = 0, .icol = 0 };
 	do {
 		tk = next_token(&ctx);
-		if (tk.type == TK_FN) {
-			tk = require_token(&ctx, TK_IDENTIFIER);
-			function* f = construct_function(arr_push(&functions));
-			f->name = tk.str;
-
-			require_token(&ctx, TK_LPAREN);
+		if (tk.type == TK_IDENTIFIER) {
+			token id_token = tk;
 			tk = next_token(&ctx);
-			while (tk.type != TK_RPAREN) {
-				// TODO: load parameters
-			}
+			if (tk.type == TK_COLON) { // declaration of something
+				tk = next_token(&ctx);
+				switch (tk.type) {
+				case TK_FN: {
+					function* f = construct_function(arr_push(&functions));
+					f->name = id_token.str;
 
-			require_token(&ctx, TK_LBRACE);
-			tk = next_token(&ctx);
-			while (tk.type != TK_RBRACE) {
-				// TODO: load function body
+					tk = require_token(&ctx, TK_LPAREN);
+					do {
+						tk = next_token(&ctx);
+						// TODO: parameters parsing
+					} while (tk.type != TK_RPAREN);
+
+					tk = require_token(&ctx, TK_LBRACE);
+					do {
+						tk = next_token(&ctx);
+						// TODO: fn body parsing
+					} while (tk.type != TK_RBRACE);
+				} break;
+				case TK_STRUCT: {
+				} break;
+				case TK_ENUM: {
+				} break;
+				default: {
+					assert(0 && "unexpected type!");
+				} break;
+				}
 			}
 		}
 	} while (tk.type != TK_EOF);
 
 	arr_foreach(&functions, function, {
-		printf("fn %.*s()\n", it->name.len, it->name.at);
+		printf("%.*s : fn()\n", it->name.len, it->name.at);
 	});
 
 	return 0;

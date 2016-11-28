@@ -1,4 +1,4 @@
 
-fn main() {
+main : fn() {
 	printf("Hello, world!\n");
 }
