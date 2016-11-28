@@ -1,4 +1,4 @@
 
 main : fn() {
-	printf("Hello, world!\n");
+	printf("Hello, world! Answer to everything is %d\n", 42);
 }

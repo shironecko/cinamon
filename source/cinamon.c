@@ -175,6 +175,10 @@ b32 is_identifier_sym(char c) {
 	return result;
 }
 
+b32 is_digit_sym(char c) {
+	return c >= '0' && c <= '9';
+}
+
 b32 is_whitespace(char c) {
 	b32 result = c == ' ' || c == '\t' || c == '\r' || c == '\n';
 	return result;
@@ -194,6 +198,7 @@ typedef enum {
 	TK_STRUCT,
 	TK_ENUM,
 	TK_STRING,
+	TK_NUMBER,
 	TK_LBRACE,
 	TK_RBRACE,
 	TK_LPAREN,
@@ -222,6 +227,8 @@ const char* get_token_type_str(token_type type) {
 			return "TK_ENUM";
 		case TK_STRING:
 			return "TK_STRING";
+		case TK_NUMBER:
+			return "TK_NUMBER";
 		case TK_LBRACE:
 			return "TK_LBRACE";
 		case TK_RBRACE:
@@ -288,6 +295,25 @@ token next_token(source_ctx* ctx) {
 		tk.type = TK_COMMA;
 	} else if (*sym.at == '#') {
 		tk.type = TK_HASH;
+	} else if (is_digit_sym(*sym.at)) {
+		tk.type = TK_NUMBER;
+		b32 decimal_point_present = false;
+		symbol s;
+		while (true) {
+			s = forward(ctx);
+			if (*s.at == '.') {
+				assert(!decimal_point_present);
+				decimal_point_present = true;
+				s = forward(ctx);
+			}
+
+			if (!is_digit_sym(*s.at)) {
+				break;
+			}
+		}
+
+		tk.str.len = s.at - sym.at;
+		forward_before_returning = false;
 	} else if (*sym.at == '"') {
 		tk.type = TK_STRING;
 		symbol s;
@@ -457,6 +483,11 @@ int main(int argc, char** argv) {
 											statement* str_param = arr_push(&call->value_call.parameters);
 											str_param->type = ST_LITERAL_STR;
 											str_param->value_str = tk.str;
+										} else if (tk.type == TK_NUMBER) {
+											statement* num_param = arr_push(&call->value_call.parameters);
+											// TODO: non s32 numbers
+											num_param->type = ST_LITERAL_S32;
+											num_param->value_s32 = atoi(tk.str.at);
 										}
 
 										if (tk.type == TK_COMMA) { tk = next_token(&ctx); }
@@ -480,8 +511,25 @@ int main(int argc, char** argv) {
 		}
 	} while (tk.type != TK_EOF);
 
+	// output C
+	printf(
+		"#include <stdio.h>\n"
+		"#include <stdint.h>\n"
+		"#include <assert.h>\n"
+		"typedef int8_t s8;\n"
+		"typedef int16_t s16;\n"
+		"typedef int32_t s32;\n"
+		"typedef int64_t s64;\n"
+		"typedef uint8_t u8;\n"
+		"typedef uint16_t u16;\n"
+		"typedef uint32_t u32;\n"
+		"typedef uint64_t u64;\n"
+		"typedef u32 b32;\n"
+		"#define true 1\n"
+		"#define false 0\n\n");
+
 	arr_foreach(&functions, function, fn, {
-		printf("%.*s : fn()\n", fn->name.len, fn->name.at);
+		printf("%.*s() {\n", fn->name.len, fn->name.at);
 		arr_foreach(&fn->statements, statement, st, {
 			switch (st->type) {
 				case ST_CALL: {
@@ -490,16 +538,21 @@ int main(int argc, char** argv) {
 						switch (param->type) {
 							case ST_LITERAL_STR: {
 								printf("\"%.*s\"", param->value_str.len, param->value_str.at);
-								if (!arr_foreach_islast(&st->value_call.parameters)) {
-									printf(", ");
-								}
+							} break;
+							case ST_LITERAL_S32: {
+								printf("%d", param->value_s32);
 							} break;
 						};
+
+						if (!arr_foreach_islast(&st->value_call.parameters)) {
+							printf(", ");
+						}
 					});
 					printf(");\n");
 				} break;
 			}
 		});
+		printf("}\n\n");
 	});
 
 	return 0;
