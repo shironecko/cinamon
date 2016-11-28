@@ -366,18 +366,8 @@ typedef enum {
 typedef struct {
 	VARIABLE_TYPE type;
 	string struct_name;
-} data_type;
-
-typedef struct {
-	data_type type;
 	string name;
 } variable;
-
-typedef struct {
-	string name;
-	array parameters;
-	array statements;
-} function;
 
 typedef enum {
 	ST_LITERAL_STR,
@@ -401,7 +391,7 @@ const char* get_statement_type_str(STATEMENT_TYPE type) {
 	return "{unexpected statement type}";
 }
 
-typedef struct {
+typedef struct statement {
 	STATEMENT_TYPE type;
 
 	union {
@@ -411,31 +401,30 @@ typedef struct {
 
 		struct {
 			string fn_name;
-			array parameters;
+			struct statement* parameters;
 		} value_call;
 	};
 } statement;
+
+typedef struct {
+	string name;
+	variable* parameters;
+	statement* statements;
+} function;
 
 #define MAX_FUNCTIONS 1024
 #define MAX_FUNCTION_STATEMENTS (1024 * 1024)
 #define MAX_FUNCTION_PARAMETERS 64
 
 function* construct_function(function* f) {
-	f->name = (string){0};
-	f->parameters = malloc_array(sizeof(variable), MAX_FUNCTION_PARAMETERS);
-	f->statements = malloc_array(sizeof(statement), MAX_FUNCTION_STATEMENTS);
+	*f = (function){0};
 	return f;
 }
 
 statement* add_statement(function* f, STATEMENT_TYPE type) {
-	statement* result = arr_push(&f->statements);
+	statement* result = stb_arr_add(f->statements);
 	*result = (statement){0};
 	result->type = type;
-
-	if (type == ST_CALL) {
-		result->value_call.parameters = malloc_array(sizeof(statement), MAX_FUNCTION_PARAMETERS);
-	}
-
 	return result;
 }
 
@@ -443,7 +432,7 @@ int main(int argc, char** argv) {
 	char* source = load_text_file("test.cn");
 	assert(source);
 
-	array functions = malloc_array(sizeof(function), MAX_FUNCTIONS);
+	function* functions = 0;
 
 	source_ctx ctx = { .source = source, .at = source, .iline = 0, .icol = 0 };
 	token tk;
@@ -465,7 +454,7 @@ int main(int argc, char** argv) {
 				tk = next_token(&ctx);
 				switch (tk.type) {
 					case TK_FN: { // function
-						function* f = construct_function(arr_push(&functions));
+						function* f = construct_function(stb_arr_add(functions));
 						f->name = id_token.str;
 
 						tk = require_token(&ctx, TK_LPAREN);
@@ -486,17 +475,15 @@ int main(int argc, char** argv) {
 									do { // parameters
 										tk = next_token(&ctx);
 										if (tk.type == TK_STRING) {
-											statement* str_param = arr_push(&call->value_call.parameters);
+											statement* str_param = stb_arr_add(call->value_call.parameters);
 											str_param->type = ST_LITERAL_STR;
 											str_param->value_str = tk.str;
 										} else if (tk.type == TK_NUMBER) {
-											statement* num_param = arr_push(&call->value_call.parameters);
+											statement* num_param = stb_arr_add(call->value_call.parameters);
 											// TODO: non s32 numbers
 											num_param->type = ST_LITERAL_S32;
 											num_param->value_s32 = atoi(tk.str.at);
 										}
-
-										if (tk.type == TK_COMMA) { tk = next_token(&ctx); }
 									} while (tk.type != TK_RPAREN);
 
 									// TODO: add support for compound statements
@@ -534,13 +521,16 @@ int main(int argc, char** argv) {
 		"#define true 1\n"
 		"#define false 0\n\n");
 
-	arr_foreach(&functions, function, fn, {
+	for (u32 ifn = 0; ifn < stb_arr_len(functions); ++ifn) {
+		function* fn = &functions[ifn];
 		printf("%.*s() {\n", fn->name.len, fn->name.at);
-		arr_foreach(&fn->statements, statement, st, {
+		for (u32 ist = 0; ist < stb_arr_len(fn->statements); ++ist) {
+			statement* st = &fn->statements[ist];
 			switch (st->type) {
 				case ST_CALL: {
 					printf("\t%.*s(", st->value_call.fn_name.len, st->value_call.fn_name.at);
-					arr_foreach(&st->value_call.parameters, statement, param, {
+					for (u32 iparam = 0, n = stb_arr_len(st->value_call.parameters); iparam < n; ++iparam) {
+						statement* param = &st->value_call.parameters[iparam];
 						switch (param->type) {
 							case ST_LITERAL_STR: {
 								printf("\"%.*s\"", param->value_str.len, param->value_str.at);
@@ -550,16 +540,16 @@ int main(int argc, char** argv) {
 							} break;
 						};
 
-						if (!arr_foreach_islast(&st->value_call.parameters)) {
+						if (iparam != stb_arr_len(st->value_call.parameters) - 1) {
 							printf(", ");
 						}
-					});
+					}
 					printf(");\n");
 				} break;
 			}
-		});
+		}
 		printf("}\n\n");
-	});
+	}
 
 	return 0;
 }

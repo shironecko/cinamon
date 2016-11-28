@@ -14,6 +14,6 @@ typedef u32 b32;
 #define false 0
 
 main() {
-	printf("Hello, world! Answer to everything is %d\n");
+	printf("Hello, world! Answer to everything is %d\n", 42);
 }
 
