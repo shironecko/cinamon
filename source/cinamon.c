@@ -203,6 +203,8 @@ typedef enum {
 	TK_FN,
 	TK_STRUCT,
 	TK_ENUM,
+	TK_U32,
+	TK_S32,
 	TK_STRING,
 	TK_NUMBER,
 	TK_LBRACE,
@@ -216,6 +218,7 @@ typedef enum {
 	TK_DOT,
 	TK_COMMA,
 	TK_HASH,
+	TK_EQUALS,
 	TK_UNKNOWN = -1
 } token_type;
 
@@ -231,6 +234,10 @@ const char* get_token_type_str(token_type type) {
 			return "TK_STRUCT";
 		case TK_ENUM:
 			return "TK_ENUM";
+		case TK_U32:
+			return "TK_U32";
+		case TK_S32:
+			return "TK_S32";
 		case TK_STRING:
 			return "TK_STRING";
 		case TK_NUMBER:
@@ -257,6 +264,8 @@ const char* get_token_type_str(token_type type) {
 			return "TK_COMMA";
 		case TK_HASH:
 			return "TK_HASH";
+		case TK_EQUALS:
+			return "TK_EQUALS";
 		case TK_UNKNOWN:
 			return "TK_UNKNOWN";
 	}
@@ -301,6 +310,8 @@ token next_token(source_ctx* ctx) {
 		tk.type = TK_COMMA;
 	} else if (*sym.at == '#') {
 		tk.type = TK_HASH;
+	} else if (*sym.at == '=') {
+		tk.type = TK_EQUALS;
 	} else if (is_digit_sym(*sym.at)) {
 		tk.type = TK_NUMBER;
 		b32 decimal_point_present = false;
@@ -340,6 +351,10 @@ token next_token(source_ctx* ctx) {
 			tk.type = TK_STRUCT;
 		} else if (!strncmp(tk.str.at, "enum", tk.str.len)) {
 			tk.type = TK_ENUM;
+		} else if (!strncmp(tk.str.at, "u32", tk.str.len)) {
+			tk.type = TK_U32;
+		} else if (!strncmp(tk.str.at, "s32", tk.str.len)) {
+			tk.type = TK_S32;
 		}
 	}
 
@@ -367,13 +382,14 @@ typedef struct {
 	VARIABLE_TYPE type;
 	string struct_name;
 	string name;
-} variable;
+} variable_sig;
 
 typedef enum {
 	ST_LITERAL_STR,
 	ST_LITERAL_S32,
 	ST_LITERAL_U32,
 	ST_CALL,
+	ST_VAR_DECL,
 } STATEMENT_TYPE;
 
 const char* get_statement_type_str(STATEMENT_TYPE type) {
@@ -386,6 +402,8 @@ const char* get_statement_type_str(STATEMENT_TYPE type) {
 			return "ST_LITERAL_U32";
 		case ST_CALL:
 			return "ST_CALL";
+		case ST_VAR_DECL:
+			return "ST_VAR_DECL";
 	};
 
 	return "{unexpected statement type}";
@@ -400,15 +418,17 @@ typedef struct statement {
 		string value_str;
 
 		struct {
-			string fn_name;
+			string name;
 			struct statement* parameters;
 		} value_call;
+
+		variable_sig value_var_decl;
 	};
 } statement;
 
 typedef struct {
 	string name;
-	variable* parameters;
+	variable_sig* parameters;
 	statement* statements;
 } function;
 
@@ -436,12 +456,14 @@ int main(int argc, char** argv) {
 
 	source_ctx ctx = { .source = source, .at = source, .iline = 0, .icol = 0 };
 	token tk;
-#if 0
+#if 0 // print all tokens
+	printf("#if 0\n");
 	do {
 		tk = next_token(&ctx);
 		printf("%3d:%-3d %-15s %.*s\n", tk.iline + 1, tk.icol + 1, get_token_type_str(tk.type),
 				tk.str.len, tk.str.at);
 	} while (tk.type != TK_EOF);
+	printf("#endif\n");
 #endif
 
 	ctx = (source_ctx){ .source = source, .at = source, .iline = 0, .icol = 0 };
@@ -463,7 +485,7 @@ int main(int argc, char** argv) {
 							// TODO: parameters parsing
 						} while (tk.type != TK_RPAREN);
 
-						tk = require_token(&ctx, TK_LBRACE);
+						while (tk.type != TK_LBRACE) { tk = next_token(&ctx); }
 						do { // body
 							tk = next_token(&ctx);
 							if (tk.type == TK_IDENTIFIER) {
@@ -471,7 +493,7 @@ int main(int argc, char** argv) {
 								tk = next_token(&ctx);
 								if (tk.type == TK_LPAREN) { // fn call
 									statement* call = add_statement(f, ST_CALL);
-									call->value_call.fn_name = st_id.str;
+									call->value_call.name = st_id.str;
 									do { // parameters
 										tk = next_token(&ctx);
 										if (tk.type == TK_STRING) {
@@ -487,6 +509,18 @@ int main(int argc, char** argv) {
 									} while (tk.type != TK_RPAREN);
 
 									// TODO: add support for compound statements
+									require_token(&ctx, TK_SEMICOLON);
+								} else if (tk.type == TK_COLON) { // var decl
+									statement* decl = add_statement(f, ST_VAR_DECL);
+									decl->value_var_decl.name = st_id.str;
+									tk = next_token(&ctx);
+									// TODO: add support for in place initialization
+									if (tk.type == TK_S32) {
+										decl->value_var_decl.type = VT_S32;
+									} else if (tk.type == TK_U32) {
+										decl->value_var_decl.type = VT_U32;
+									}
+
 									require_token(&ctx, TK_SEMICOLON);
 								}
 							}
@@ -528,7 +562,7 @@ int main(int argc, char** argv) {
 			statement* st = &fn->statements[ist];
 			switch (st->type) {
 				case ST_CALL: {
-					printf("\t%.*s(", st->value_call.fn_name.len, st->value_call.fn_name.at);
+					printf("\t%.*s(", st->value_call.name.len, st->value_call.name.at);
 					for (u32 iparam = 0, n = stb_arr_len(st->value_call.parameters); iparam < n; ++iparam) {
 						statement* param = &st->value_call.parameters[iparam];
 						switch (param->type) {
@@ -546,6 +580,21 @@ int main(int argc, char** argv) {
 					}
 					printf(");\n");
 				} break;
+				case ST_VAR_DECL: {
+					switch (st->value_var_decl.type) {
+						case VT_U32: {
+							printf("\tu32 ");
+						} break;
+						case VT_S32: {
+							printf("\ts32 ");
+						} break;
+						default: {
+							printf("\t{error: unsupported variable type} ");
+					 	} break;
+					}
+
+					printf("%.*s = 0;\n", st->value_var_decl.name.len, st->value_var_decl.name.at);
+				}
 			}
 		}
 		printf("}\n\n");
