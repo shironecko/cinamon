@@ -312,6 +312,13 @@ token next_token(source_ctx* ctx) {
 		tk.type = TK_HASH;
 	} else if (*sym.at == '=') {
 		tk.type = TK_EQUALS;
+	} else if (*sym.at == '/' && *next(ctx).at == '*') {
+		while (!(*current(ctx).at == '*' && *next(ctx).at == '/')) {
+			forward(ctx);
+		}
+		forward(ctx); forward(ctx);
+		forward_before_returning = false;
+		tk = next_token(ctx);
 	} else if (is_digit_sym(*sym.at)) {
 		tk.type = TK_NUMBER;
 		b32 decimal_point_present = false;
@@ -390,6 +397,7 @@ typedef enum {
 	ST_LITERAL_U32,
 	ST_CALL,
 	ST_VAR_DECL,
+	ST_ASSIGNMENT,
 } STATEMENT_TYPE;
 
 const char* get_statement_type_str(STATEMENT_TYPE type) {
@@ -404,6 +412,8 @@ const char* get_statement_type_str(STATEMENT_TYPE type) {
 			return "ST_CALL";
 		case ST_VAR_DECL:
 			return "ST_VAR_DECL";
+		case ST_ASSIGNMENT:
+			return "ST_ASSIGNMENT";
 	};
 
 	return "{unexpected statement type}";
@@ -423,6 +433,11 @@ typedef struct statement {
 		} value_call;
 
 		variable_sig value_var_decl;
+
+		struct {
+			string var_name;
+			struct statement* statement;
+		} value_assignment;
 	};
 } statement;
 
@@ -522,6 +537,17 @@ int main(int argc, char** argv) {
 									}
 
 									require_token(&ctx, TK_SEMICOLON);
+								} else if (tk.type == TK_EQUALS) { // assignment
+									statement* assignment = add_statement(f, ST_ASSIGNMENT);
+									assignment->value_assignment.var_name = st_id.str;
+
+									// TODO: make this whole thing recursive to parse compound statements
+									tk = require_token(&ctx, TK_NUMBER);
+									assignment->value_assignment.statement = malloc(sizeof(statement));
+									*assignment->value_assignment.statement = (statement){0};
+									assignment->value_assignment.statement->type = ST_LITERAL_S32;
+									assignment->value_assignment.statement->value_s32 = atoi(tk.str.at);
+									require_token(&ctx, TK_SEMICOLON);
 								}
 							}
 						} while (tk.type != TK_RBRACE);
@@ -594,7 +620,14 @@ int main(int argc, char** argv) {
 					}
 
 					printf("%.*s = 0;\n", st->value_var_decl.name.len, st->value_var_decl.name.at);
-				}
+				} break;
+				case ST_ASSIGNMENT: {
+					printf("\t%.*s = ", st->value_assignment.var_name.len, st->value_assignment.var_name.at);
+					if (st->value_assignment.statement->type == ST_LITERAL_S32) {
+						printf("%d", st->value_assignment.statement->value_s32);
+					}
+					printf(";\n");
+				} break;
 			}
 		}
 		printf("}\n\n");

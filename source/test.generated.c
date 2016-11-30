@@ -14,6 +14,12 @@ typedef u32 b32;
 #define false 0
 
 main() {
-	printf("Hello, world! Answer to everything is %d\n", 42);
+	s32 answer_to_everything = 0;
+	answer_to_everything = 5;
+	printf("Hello, world! Answer to everything is %d\n");
+	printf("Sorry, I've double checked, the answer to everything is actually %d\n");
+}
+
+get_answer_to_everything() {
 }
 
