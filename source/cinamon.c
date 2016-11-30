@@ -391,13 +391,32 @@ typedef struct {
 	string name;
 } variable_sig;
 
+b32 is_primitive(VARIABLE_TYPE type) {
+	return type != VT_STRUCT && type != VT_ENUM;
+}
+
+VARIABLE_TYPE token_type_2_variable_type(TOKEN_TYPE type) {
+	switch (type) {
+		case TK_S32:
+			return VT_S32;
+		case TK_U32:
+			return VT_U32;
+	}
+
+	assert(0 && "unexpected token type!");
+}
+
 typedef enum {
 	ST_LITERAL_STR,
 	ST_LITERAL_S32,
 	ST_LITERAL_U32,
-	ST_CALL,
+	ST_VAR,
 	ST_VAR_DECL,
+	ST_FN,
+	ST_FN_DECL,
+	ST_FN_CALL,
 	ST_ASSIGNMENT,
+	ST_UNKNOWN,
 } STATEMENT_TYPE;
 
 const char* get_statement_type_str(STATEMENT_TYPE type) {
@@ -408,16 +427,30 @@ const char* get_statement_type_str(STATEMENT_TYPE type) {
 			return "ST_LITERAL_S32";
 		case ST_LITERAL_U32:
 			return "ST_LITERAL_U32";
-		case ST_CALL:
-			return "ST_CALL";
+		case ST_VAR:
+			return "ST_VAR";
 		case ST_VAR_DECL:
 			return "ST_VAR_DECL";
+		case ST_FN:
+			return "ST_FN";
+		case ST_FN_DECL:
+			return "ST_FN_DECL";
+		case ST_FN_CALL:
+			return "ST_FN_CALL";
 		case ST_ASSIGNMENT:
 			return "ST_ASSIGNMENT";
+		case ST_UNKNOWN:
+			return "ST_UNKNOWN";
 	};
 
 	return "{unexpected statement type}";
 }
+
+typedef struct {
+	string name;
+	variable_sig* parameters;
+	struct statement* statements[];
+} function_sig;
 
 typedef struct statement {
 	STATEMENT_TYPE type;
@@ -427,12 +460,14 @@ typedef struct statement {
 		u32 value_u32;
 		string value_str;
 
+		variable_sig value_var_decl;
+
 		struct {
 			string name;
 			struct statement* parameters;
-		} value_call;
+		} value_fn_call;
 
-		variable_sig value_var_decl;
+		function_sig value_fn_decl;
 
 		struct {
 			string var_name;
@@ -440,12 +475,6 @@ typedef struct statement {
 		} value_assignment;
 	};
 } statement;
-
-typedef struct {
-	string name;
-	variable_sig* parameters;
-	statement* statements;
-} function;
 
 #define MAX_FUNCTIONS 1024
 #define MAX_FUNCTION_STATEMENTS (1024 * 1024)
@@ -461,6 +490,121 @@ statement* add_statement(function* f, STATEMENT_TYPE type) {
 	*result = (statement){0};
 	result->type = type;
 	return result;
+}
+
+statement* malloc_statement(ST_TYPE type) {
+	statement* result = malloc(sizeof(statement));
+	*result = (statement){0};
+	result->type = type;
+	return result;
+}
+
+statement* parse_statement(souce_ctx* ctx) {
+	statement* st = malloc_statement(ST_UNKNOWN);
+	token tk = next_token(&ctx);
+	if (tk.type == TK_IDENTIFIER) {
+		token id_token = tk;
+		tk = next_token(&ctx);
+		if (tk.type == TK_COLON) { // declaration of something
+			tk = next_token(&ctx);
+			if (tk.type == TK_FN) { // function
+				st->type = ST_FN_DECL;
+				function* f = &st->value_fn_decl;
+				f->name = id_token.str;
+
+				tk = require_token(&ctx, TK_LPAREN);
+				do { // parameters
+					tk = next_token(&ctx);
+					// TODO: parameters parsing
+				} while (tk.type != TK_RPAREN);
+
+				// TODO: return value type parsing
+				while (tk.type != TK_LBRACE) { tk = next_token(&ctx); }
+				while (true) { // body
+					source_ctx tmp_ctx = *ctx;
+					token peek_tk = next_token(&tmp_ctx);
+					if (peek_tk.type == TK_RBRACE) {
+						break;
+					}
+				}
+				require_token(&ctx, TK_RBRACE);
+			} else if (is_primitive(tk.type)) { // primitive type
+				st->type = ST_VAR_DECL;
+				variable_sig* var = &st->value_var_decl;
+				var->name = st_id.str;
+				var->type = token_type_2_variable_type(tk.type);
+				// TODO: add support for in place initialization
+				require_token(&ctx, TK_SEMICOLON);
+			} else if (tk.type == TK_STRING) {
+				st->type = ST_LITERAL_STR;
+				st->value_str = tk.str;
+			} else if (tk.type == TK_NUMBER) {
+				// TODO: actual number parsing instead of this bullshit
+				st->type = ST_LITERAL_S32;
+				st->value_s32 = atoi(tk.str.at);
+			}
+		} else if (tk.type == TK_LPAREN) {
+			st->type = ST_FN_CALL;
+
+		}
+
+					stb_arr_push(f->statements, parse_statement(ctx));
+
+					tk = next_token(&ctx);
+					if (tk.type == TK_IDENTIFIER) {
+						token st_id = tk;
+						tk = next_token(&ctx);
+						if (tk.type == TK_LPAREN) { // fn call
+							statement* call = add_statement(f, ST_CALL);
+							call->value_call.name = st_id.str;
+							do { // parameters
+								tk = next_token(&ctx);
+								if (tk.type == TK_STRING) {
+									statement* str_param = stb_arr_add(call->value_call.parameters);
+									str_param->type = ST_LITERAL_STR;
+									str_param->value_str = tk.str;
+								} else if (tk.type == TK_NUMBER) {
+									statement* num_param = stb_arr_add(call->value_call.parameters);
+									// TODO: non s32 numbers
+									num_param->type = ST_LITERAL_S32;
+									num_param->value_s32 = atoi(tk.str.at);
+								}
+							} while (tk.type != TK_RPAREN);
+
+							// TODO: add support for compound statements
+							require_token(&ctx, TK_SEMICOLON);
+						} else if (tk.type == TK_COLON) { // var decl
+							statement* decl = add_statement(f, ST_VAR_DECL);
+							decl->value_var_decl.name = st_id.str;
+							tk = next_token(&ctx);
+							// TODO: add support for in place initialization
+							if (tk.type == TK_S32) {
+								decl->value_var_decl.type = VT_S32;
+							} else if (tk.type == TK_U32) {
+								decl->value_var_decl.type = VT_U32;
+							}
+
+							require_token(&ctx, TK_SEMICOLON);
+						} else if (tk.type == TK_EQUALS) { // assignment
+							statement* assignment = add_statement(f, ST_ASSIGNMENT);
+							assignment->value_assignment.var_name = st_id.str;
+
+							// TODO: make this whole thing recursive to parse compound statements
+							tk = require_token(&ctx, TK_NUMBER);
+							assignment->value_assignment.statement = malloc(sizeof(statement));
+							*assignment->value_assignment.statement = (statement){0};
+							assignment->value_assignment.statement->type = ST_LITERAL_S32;
+							assignment->value_assignment.statement->value_s32 = atoi(tk.str.at);
+							require_token(&ctx, TK_SEMICOLON);
+						}
+					}
+				} while (tk.type != TK_RBRACE);
+				}
+			} else if (tk.type == ???
+		}
+	}
+
+	return st;
 }
 
 int main(int argc, char** argv) {
