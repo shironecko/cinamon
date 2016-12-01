@@ -392,7 +392,7 @@ typedef enum {
 
 typedef struct {
 	VARIABLE_TYPE type;
-	string struct_name;
+	string custom_type_name;
 	string name;
 } variable_sig;
 
@@ -597,6 +597,63 @@ statement* parse_statement(source_ctx* ctx) {
 	return st;
 }
 
+void print_ast(statement* root) {
+	if (root->type == ST_LITERAL_S32) {
+		printf("%d", root->value_s32);
+	} else if (root->type == ST_LITERAL_U32) {
+		printf("%u", root->value_u32);
+	} else if (root->type == ST_LITERAL_STR) {
+		printf("\"%.*s\"", root->value_str.len, root->value_str.at);
+	} else if (root->type == ST_IDENTIFIER) {
+		printf("%.*s", root->value_identifier.name.len, root->value_identifier.name.at);
+	} else if (root->type == ST_VAR_DECL) {
+		variable_sig* var = &root->value_var_decl;
+		printf("%.*s : ", var->name.len, var->name.at);
+		switch (var->type) {
+			case VT_S32: {
+				printf("s32");
+			} break;
+			case VT_U32: {
+				printf("u32");
+			} break;
+			case VT_STRUCT:
+			case VT_ENUM: {
+				printf("%.*s", var->custom_type_name.len, var->custom_type_name.at);
+			} break;
+			default: {
+				printf("{unknown var type}");
+			} break;
+		}
+	} else if (root->type == ST_FN_DECL) {
+		function_sig* f = &root->value_fn_decl;
+		// TODO: parameters printing
+		printf("%.*s : fn() {", f->name.len, f->name.at);
+		for (u32 i = 0; i < stb_arr_len(f->statements); ++i) {
+			printf("\n\t");
+			print_ast(f->statements[i]);
+		}
+		printf("\n}\n");
+	} else if (root->type == ST_FN_CALL) {
+		function_call* f = &root->value_fn_call;
+		printf("%.*s(", f->name.len, f->name.at);
+		for (u32 i = 0, n = stb_arr_len(f->parameters); i < n; ++i) {
+			print_ast(f->parameters[i]);
+			if (i != n - 1) {
+				printf(", ");
+			}
+		}
+		printf(")");
+	} else if (root->type == ST_ASSIGNMENT) {
+		assignment* a = &root->value_assignment;
+		printf("%.*s = ", a->var_name.len, a->var_name.at);
+		print_ast(a->statement);
+	} else if (root->type == ST_UNKNOWN) {
+		printf("ST_UNKNOWN");
+	} else {
+		printf("{unknown node type}");
+	}
+}
+
 int main(int argc, char** argv) {
 	char* source = load_text_file("test.cn");
 	assert(source);
@@ -623,73 +680,9 @@ int main(int argc, char** argv) {
 	}
 #endif
 
-#if 0 // output C
-	printf(
-		"#include <stdio.h>\n"
-		"#include <stdint.h>\n"
-		"#include <assert.h>\n"
-		"typedef int8_t s8;\n"
-		"typedef int16_t s16;\n"
-		"typedef int32_t s32;\n"
-		"typedef int64_t s64;\n"
-		"typedef uint8_t u8;\n"
-		"typedef uint16_t u16;\n"
-		"typedef uint32_t u32;\n"
-		"typedef uint64_t u64;\n"
-		"typedef u32 b32;\n"
-		"#define true 1\n"
-		"#define false 0\n\n");
-
-	for (u32 ifn = 0; ifn < stb_arr_len(functions); ++ifn) {
-		function* fn = &functions[ifn];
-		printf("%.*s() {\n", fn->name.len, fn->name.at);
-		for (u32 ist = 0; ist < stb_arr_len(fn->statements); ++ist) {
-			statement* st = &fn->statements[ist];
-			switch (st->type) {
-				case ST_CALL: {
-					printf("\t%.*s(", st->value_call.name.len, st->value_call.name.at);
-					for (u32 iparam = 0, n = stb_arr_len(st->value_call.parameters); iparam < n; ++iparam) {
-						statement* param = &st->value_call.parameters[iparam];
-						switch (param->type) {
-							case ST_LITERAL_STR: {
-								printf("\"%.*s\"", param->value_str.len, param->value_str.at);
-							} break;
-							case ST_LITERAL_S32: {
-								printf("%d", param->value_s32);
-							} break;
-						};
-
-						if (iparam != stb_arr_len(st->value_call.parameters) - 1) {
-							printf(", ");
-						}
-					}
-					printf(");\n");
-				} break;
-				case ST_VAR_DECL: {
-					switch (st->value_var_decl.type) {
-						case VT_U32: {
-							printf("\tu32 ");
-						} break;
-						case VT_S32: {
-							printf("\ts32 ");
-						} break;
-						default: {
-							printf("\t{error: unsupported variable type} ");
-					 	} break;
-					}
-
-					printf("%.*s = 0;\n", st->value_var_decl.name.len, st->value_var_decl.name.at);
-				} break;
-				case ST_ASSIGNMENT: {
-					printf("\t%.*s = ", st->value_assignment.var_name.len, st->value_assignment.var_name.at);
-					if (st->value_assignment.statement->type == ST_LITERAL_S32) {
-						printf("%d", st->value_assignment.statement->value_s32);
-					}
-					printf(";\n");
-				} break;
-			}
-		}
-		printf("}\n\n");
+#if 1
+	for (u32 i = 0; i < stb_arr_len(statements); ++i) {
+		print_ast(statements[i]);
 	}
 #endif
 
