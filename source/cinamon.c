@@ -219,6 +219,7 @@ typedef enum {
 	TK_COMMA,
 	TK_HASH,
 	TK_EQUALS,
+	TK_ARROW,
 	TK_UNKNOWN = -1
 } TOKEN_TYPE;
 
@@ -266,6 +267,8 @@ const char* get_token_type_str(TOKEN_TYPE type) {
 			return "TK_HASH";
 		case TK_EQUALS:
 			return "TK_EQUALS";
+		case TK_ARROW:
+			return "TK_ARROW";
 		case TK_UNKNOWN:
 			return "TK_UNKNOWN";
 	}
@@ -319,6 +322,10 @@ token next_token(source_ctx* ctx) {
 		forward(ctx); forward(ctx);
 		forward_before_returning = false;
 		tk = next_token(ctx);
+	} else if (*sym.at == '-' && *next(ctx).at == '>') {
+		tk.type = TK_ARROW;
+		tk.str.len = 2;
+		forward(ctx);
 	} else if (is_digit_sym(*sym.at)) {
 		tk.type = TK_NUMBER;
 		b32 decimal_point_present = false;
@@ -382,13 +389,43 @@ token require_token(source_ctx* ctx, TOKEN_TYPE required_type) {
 	return tk;
 }
 
-typedef enum {
-	VT_S32,
-	VT_U32,
-	VT_STRUCT,
-	VT_ENUM,
-	VT_UNKNOWN,
-} VARIABLE_TYPE;
+/*******************************ENUM SIGNATURES*******************************/
+
+#define META_ENUM_MEMBER(member_name) member_name,
+
+#define META_EMIT_ENUM_SIGNATURE(enum_members, enum_name) \
+	typedef enum enum_name { \
+		enum_members \
+	} enum_name;
+
+#define META_VARIABLE_TYPE_MEMBERS \
+	META_ENUM_MEMBER(VT_VOID) \
+	META_ENUM_MEMBER(VT_S32) \
+	META_ENUM_MEMBER(VT_U32) \
+	META_ENUM_MEMBER(VT_STRUCT) \
+	META_ENUM_MEMBER(VT_ENUM) \
+	META_ENUM_MEMBER(VT_UNKNOWN)
+
+META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
+
+/***************************ENUM TO STRING FUNCTIONS***************************/
+
+#undef META_ENUM_MEMBER
+#define META_ENUM_MEMBER(member_name) #member_name,
+
+#define META_EMIT_ENUM_TO_STR_FN(enum_members, enum_name) \
+	const char* enum_name##_STR(enum_name value) { \
+		char* strings[] = { enum_members }; \
+		u32 nstrings = sizeof(strings) / sizeof(*strings); \
+		if (value < nstrings) { \
+			return strings[value]; \
+		} \
+		return "{outside of enum_name range}"; \
+	}
+
+META_EMIT_ENUM_TO_STR_FN(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
+
+/*********************************END OF ENUMS*********************************/
 
 typedef struct {
 	VARIABLE_TYPE type;
@@ -454,6 +491,7 @@ const char* get_statement_type_str(STATEMENT_TYPE type) {
 
 typedef struct {
 	string name;
+	VARIABLE_TYPE return_type;
 	variable_sig* parameters;
 	struct statement** statements;
 } function_sig;
@@ -534,8 +572,13 @@ statement* parse_statement(source_ctx* ctx) {
 					// TODO: parameters parsing
 				} while (tk.type != TK_RPAREN);
 
-				// TODO: return value type parsing
-				while (tk.type != TK_LBRACE) { tk = next_token(ctx); }
+				tk = peek_token(*ctx);
+				if (tk.type == TK_ARROW) { // return type
+					require_token(ctx, TK_ARROW);
+					tk = next_token(ctx);
+					f->return_type = token_type_2_variable_type(tk.type);
+				}
+				require_token(ctx, TK_LBRACE);
 				while (true) { // body
 					tk = peek_token(*ctx);
 					if (tk.type == TK_RBRACE) {
@@ -627,7 +670,11 @@ void print_ast(statement* root) {
 	} else if (root->type == ST_FN_DECL) {
 		function_sig* f = &root->value_fn_decl;
 		// TODO: parameters printing
-		printf("%.*s : fn() {", f->name.len, f->name.at);
+		printf("%.*s : fn() ", f->name.len, f->name.at);
+		if (f->return_type != VT_VOID) {
+			printf("-> %s ", VARIABLE_TYPE_STR(f->return_type));
+		}
+		printf("{");
 		for (u32 i = 0; i < stb_arr_len(f->statements); ++i) {
 			printf("\n\t");
 			print_ast(f->statements[i]);
