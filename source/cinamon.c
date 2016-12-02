@@ -25,78 +25,43 @@ typedef u32 b32;
 #define true 1
 #define false 0
 
-typedef struct {
-	unsigned char* data;
-	int size;
-	int capacity;
-	int item_size;
-} array;
+/*******************************ENUM SIGNATURES*******************************/
 
-array new_array(void* memory, int memory_size, int item_size) {
-	assert(memory);
-	assert(memory_size);
-	assert(item_size);
+#define META_ENUM_MEMBER(member_name) member_name,
 
-	return (array){ .data = (unsigned char*)memory, .item_size = item_size, .capacity = memory_size / item_size };
-}
+#define META_EMIT_ENUM_SIGNATURE(enum_members, enum_name) \
+	typedef enum enum_name { \
+		enum_members \
+	} enum_name;
 
-array malloc_array(int item_size, int items_count) {
-	int array_data_size = item_size * items_count;
-	unsigned char* array_data = malloc(array_data_size);
-	assert(array_data);
-	array result = new_array(array_data, array_data_size, item_size);
-	assert(result.capacity == items_count);
-	return result;
-}
+#define META_VARIABLE_TYPE_MEMBERS \
+	META_ENUM_MEMBER(VT_VOID) \
+	META_ENUM_MEMBER(VT_S32) \
+	META_ENUM_MEMBER(VT_U32) \
+	META_ENUM_MEMBER(VT_STRUCT) \
+	META_ENUM_MEMBER(VT_ENUM) \
+	META_ENUM_MEMBER(VT_UNKNOWN)
 
-void free_array(array* arr) {
-	free(arr->data);
-	*arr = (array){0};
-}
+META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
-void assert_array_valid(array* arr) {
-	assert(arr);
-	assert(arr->data);
-	assert(arr->capacity);
-	assert(arr->item_size);
-	assert(arr->size <= arr->capacity);
-}
+/***************************ENUM TO STRING FUNCTIONS***************************/
 
-void* arr_push(array* arr) {
-	assert_array_valid(arr);
-	assert(arr->size < arr->capacity);
-	void* new_item_ptr = arr->data + arr->size * arr->item_size;
-	++arr->size;
-	return new_item_ptr;
-}
+#undef META_ENUM_MEMBER
+#define META_ENUM_MEMBER(member_name) #member_name,
 
-void arr_clear(array* arr) {
-	assert_array_valid(arr);
-	arr->size = 0;
-}
+#define META_EMIT_ENUM_TO_STR_FN(enum_members, enum_name) \
+	const char* enum_name##_STR(enum_name value) { \
+		char* strings[] = { enum_members }; \
+		u32 nstrings = sizeof(strings) / sizeof(*strings); \
+		if (value < nstrings) { \
+			return strings[value]; \
+		} \
+		return "{outside of enum_name range}"; \
+	}
 
-void* arr_get(array* arr, int i) {
-	assert_array_valid(arr);
-	assert(i < arr->size);
-	return arr->data + arr->item_size * i;
-}
+META_EMIT_ENUM_TO_STR_FN(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
-#define arr_foreach(arr, type, it_name, body) \
-	{ for (int _foreach_ctr = 0; _foreach_ctr < (arr)->size; ++_foreach_ctr) { \
-		type* it_name = arr_get((arr), _foreach_ctr); \
-		{ body } \
-	}}
-
-#define arr_foreach_islast(arr) ((_foreach_ctr) == ((arr)->size - 1))
-
-void arr_copy(array* dst, array* src) {
-	assert_array_valid(dst);
-	assert_array_valid(src);
-	assert(dst->item_size == src->item_size);
-	assert(dst->capacity >= src->size);
-	memcpy(dst->data, src->data, src->size * src->item_size);
-	dst->size = src->size;
-}
+/*********************************END OF ENUMS*********************************/
 
 char* load_text_file(const char* path) {
 	FILE* file = fopen(path, "rb");
@@ -389,43 +354,6 @@ token require_token(source_ctx* ctx, TOKEN_TYPE required_type) {
 	return tk;
 }
 
-/*******************************ENUM SIGNATURES*******************************/
-
-#define META_ENUM_MEMBER(member_name) member_name,
-
-#define META_EMIT_ENUM_SIGNATURE(enum_members, enum_name) \
-	typedef enum enum_name { \
-		enum_members \
-	} enum_name;
-
-#define META_VARIABLE_TYPE_MEMBERS \
-	META_ENUM_MEMBER(VT_VOID) \
-	META_ENUM_MEMBER(VT_S32) \
-	META_ENUM_MEMBER(VT_U32) \
-	META_ENUM_MEMBER(VT_STRUCT) \
-	META_ENUM_MEMBER(VT_ENUM) \
-	META_ENUM_MEMBER(VT_UNKNOWN)
-
-META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
-
-/***************************ENUM TO STRING FUNCTIONS***************************/
-
-#undef META_ENUM_MEMBER
-#define META_ENUM_MEMBER(member_name) #member_name,
-
-#define META_EMIT_ENUM_TO_STR_FN(enum_members, enum_name) \
-	const char* enum_name##_STR(enum_name value) { \
-		char* strings[] = { enum_members }; \
-		u32 nstrings = sizeof(strings) / sizeof(*strings); \
-		if (value < nstrings) { \
-			return strings[value]; \
-		} \
-		return "{outside of enum_name range}"; \
-	}
-
-META_EMIT_ENUM_TO_STR_FN(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
-
-/*********************************END OF ENUMS*********************************/
 
 typedef struct {
 	VARIABLE_TYPE type;
