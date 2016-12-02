@@ -352,8 +352,8 @@ typedef struct {
 } function_call;
 
 typedef struct {
-	string var_name;
-	struct statement* statement;
+	struct statement* left_hand;
+	struct statement* right_hand;
 } assignment;
 
 typedef struct {
@@ -468,11 +468,14 @@ statement* parse_statement(source_ctx* ctx) {
 			require_token(ctx, TK_SEMICOLON);
 		} else if (tk.type == TK_EQUALS) { // assignment
 			require_token(ctx, TK_EQUALS);
-			st->type = ST_ASSIGNMENT;
-			assignment* a = &st->value_assignment;
-			a->var_name = id_token.str;
-			a->statement = parse_statement(ctx);
+			st->type = ST_IDENTIFIER;
+			st->value_identifier.name = id_token.str;
+			statement* assignment = malloc_statement(ST_ASSIGNMENT);
+			assignment* a = &assignment->value_assignment;
+			a->left_hand = st;
+			a->right_hand = parse_statement(ctx);
 			require_token(ctx, TK_SEMICOLON);
+			st = assignment;
 		} else {
 			st->type = ST_IDENTIFIER;
 			identifier* id = &st->value_identifier;
@@ -542,8 +545,9 @@ void print_ast(statement* root) {
 		printf(")");
 	} else if (root->type == ST_ASSIGNMENT) {
 		assignment* a = &root->value_assignment;
-		printf("%.*s = ", a->var_name.len, a->var_name.at);
-		print_ast(a->statement);
+		print_ast(a->left_hand);
+		printf(" = ");
+		print_ast(a->right_hand);
 	} else if (root->type == ST_UNKNOWN) {
 		printf("ST_UNKNOWN");
 	} else {
