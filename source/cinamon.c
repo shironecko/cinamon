@@ -34,6 +34,43 @@ typedef u32 b32;
 		enum_members \
 	} enum_name;
 
+#define META_TOKEN_TYPE_MEMBERS \
+	META_ENUM_MEMBER(TK_EOF) \
+	META_ENUM_MEMBER(TK_IDENTIFIER) \
+	META_ENUM_MEMBER(TK_FN) \
+	META_ENUM_MEMBER(TK_STRUCT) \
+	META_ENUM_MEMBER(TK_ENUM) \
+	META_ENUM_MEMBER(TK_U32) \
+	META_ENUM_MEMBER(TK_S32) \
+	META_ENUM_MEMBER(TK_STRING) \
+	META_ENUM_MEMBER(TK_NUMBER) \
+	META_ENUM_MEMBER(TK_LBRACE) \
+	META_ENUM_MEMBER(TK_RBRACE) \
+	META_ENUM_MEMBER(TK_LPAREN) \
+	META_ENUM_MEMBER(TK_RPAREN) \
+	META_ENUM_MEMBER(TK_LBRACKET) \
+	META_ENUM_MEMBER(TK_RBRACKET) \
+	META_ENUM_MEMBER(TK_SEMICOLON) \
+	META_ENUM_MEMBER(TK_COLON) \
+	META_ENUM_MEMBER(TK_DOT) \
+	META_ENUM_MEMBER(TK_COMMA) \
+	META_ENUM_MEMBER(TK_HASH) \
+	META_ENUM_MEMBER(TK_EQUALS) \
+	META_ENUM_MEMBER(TK_ARROW) \
+	META_ENUM_MEMBER(TK_UNKNOWN) \
+
+#define META_STATEMENT_TYPE_MEMBERS \
+	META_ENUM_MEMBER(ST_LITERAL_STR) \
+	META_ENUM_MEMBER(ST_LITERAL_S32) \
+	META_ENUM_MEMBER(ST_LITERAL_U32) \
+	META_ENUM_MEMBER(ST_VAR_DECL) \
+	META_ENUM_MEMBER(ST_FN) \
+	META_ENUM_MEMBER(ST_FN_DECL) \
+	META_ENUM_MEMBER(ST_FN_CALL) \
+	META_ENUM_MEMBER(ST_IDENTIFIER) \
+	META_ENUM_MEMBER(ST_ASSIGNMENT) \
+	META_ENUM_MEMBER(ST_UNKNOWN) \
+
 #define META_VARIABLE_TYPE_MEMBERS \
 	META_ENUM_MEMBER(VT_VOID) \
 	META_ENUM_MEMBER(VT_S32) \
@@ -42,6 +79,8 @@ typedef u32 b32;
 	META_ENUM_MEMBER(VT_ENUM) \
 	META_ENUM_MEMBER(VT_UNKNOWN)
 
+META_EMIT_ENUM_SIGNATURE(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
+META_EMIT_ENUM_SIGNATURE(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
 /***************************ENUM TO STRING FUNCTIONS***************************/
@@ -59,6 +98,8 @@ META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 		return "{outside of enum_name range}"; \
 	}
 
+META_EMIT_ENUM_TO_STR_FN(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
+META_EMIT_ENUM_TO_STR_FN(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
 /*********************************END OF ENUMS*********************************/
@@ -160,85 +201,6 @@ void eat_whitespace(source_ctx* ctx) {
 	while (is_whitespace(*sym.at)) { 
 		sym = forward(ctx); 
 	}
-}
-
-typedef enum {
-	TK_EOF = 0,
-	TK_IDENTIFIER,
-	TK_FN,
-	TK_STRUCT,
-	TK_ENUM,
-	TK_U32,
-	TK_S32,
-	TK_STRING,
-	TK_NUMBER,
-	TK_LBRACE,
-	TK_RBRACE,
-	TK_LPAREN,
-	TK_RPAREN,
-	TK_LBRACKET,
-	TK_RBRACKET,
-	TK_SEMICOLON,
-	TK_COLON,
-	TK_DOT,
-	TK_COMMA,
-	TK_HASH,
-	TK_EQUALS,
-	TK_ARROW,
-	TK_UNKNOWN = -1
-} TOKEN_TYPE;
-
-const char* get_token_type_str(TOKEN_TYPE type) {
-	switch (type) {
-		case TK_EOF:
-			return "TK_EOF";
-		case TK_IDENTIFIER:
-			return "TK_IDENTIFIER";
-		case TK_FN:
-			return "TK_FN";
-		case TK_STRUCT:
-			return "TK_STRUCT";
-		case TK_ENUM:
-			return "TK_ENUM";
-		case TK_U32:
-			return "TK_U32";
-		case TK_S32:
-			return "TK_S32";
-		case TK_STRING:
-			return "TK_STRING";
-		case TK_NUMBER:
-			return "TK_NUMBER";
-		case TK_LBRACE:
-			return "TK_LBRACE";
-		case TK_RBRACE:
-			return "TK_RBRACE";
-		case TK_LPAREN:
-			return "TK_LPAREN";
-		case TK_RPAREN:
-			return "TK_RPAREN";
-		case TK_LBRACKET:
-			return "TK_LBRACKET";
-		case TK_RBRACKET:
-			return "TK_RBRACKET";
-		case TK_SEMICOLON:
-			return "TK_SEMICOLON";
-		case TK_COLON:
-			return "TK_COLON";
-		case TK_DOT:
-			return "TK_DOT";
-		case TK_COMMA:
-			return "TK_COMMA";
-		case TK_HASH:
-			return "TK_HASH";
-		case TK_EQUALS:
-			return "TK_EQUALS";
-		case TK_ARROW:
-			return "TK_ARROW";
-		case TK_UNKNOWN:
-			return "TK_UNKNOWN";
-	}
-
-	return "{unexpected token type}";
 }
 
 typedef struct {
@@ -375,46 +337,6 @@ VARIABLE_TYPE token_type_2_variable_type(TOKEN_TYPE type) {
 
 	assert(0 && "unexpected token type!");
 	return VT_UNKNOWN;
-}
-
-typedef enum {
-	ST_LITERAL_STR,
-	ST_LITERAL_S32,
-	ST_LITERAL_U32,
-	ST_VAR_DECL,
-	ST_FN,
-	ST_FN_DECL,
-	ST_FN_CALL,
-	ST_IDENTIFIER,
-	ST_ASSIGNMENT,
-	ST_UNKNOWN,
-} STATEMENT_TYPE;
-
-const char* get_statement_type_str(STATEMENT_TYPE type) {
-	switch (type) {
-		case ST_LITERAL_STR:
-			return "ST_LITERAL_STR";
-		case ST_LITERAL_S32:
-			return "ST_LITERAL_S32";
-		case ST_LITERAL_U32:
-			return "ST_LITERAL_U32";
-		case ST_VAR_DECL:
-			return "ST_VAR_DECL";
-		case ST_FN:
-			return "ST_FN";
-		case ST_FN_DECL:
-			return "ST_FN_DECL";
-		case ST_FN_CALL:
-			return "ST_FN_CALL";
-		case ST_IDENTIFIER:
-			return "ST_IDENTIFIER";
-		case ST_ASSIGNMENT:
-			return "ST_ASSIGNMENT";
-		case ST_UNKNOWN:
-			return "ST_UNKNOWN";
-	};
-
-	return "{unexpected statement type}";
 }
 
 typedef struct {
@@ -639,7 +561,7 @@ int main(int argc, char** argv) {
 	printf("#if 0\n");
 	do {
 		tk = next_token(&ctx);
-		printf("%3d:%-3d %-15s %.*s\n", tk.iline + 1, tk.icol + 1, get_token_type_str(tk.type),
+		printf("%3d:%-3d %-15s %.*s\n", tk.iline + 1, tk.icol + 1, TOKEN_TYPE_STR(tk.type),
 				tk.str.len, tk.str.at);
 	} while (tk.type != TK_EOF);
 	printf("#endif\n");
