@@ -470,12 +470,12 @@ statement* parse_statement(source_ctx* ctx) {
 			require_token(ctx, TK_EQUALS);
 			st->type = ST_IDENTIFIER;
 			st->value_identifier.name = id_token.str;
-			statement* assignment = malloc_statement(ST_ASSIGNMENT);
-			assignment* a = &assignment->value_assignment;
+			statement* asgn = malloc_statement(ST_ASSIGNMENT);
+			assignment* a = &asgn->value_assignment;
 			a->left_hand = st;
 			a->right_hand = parse_statement(ctx);
 			require_token(ctx, TK_SEMICOLON);
-			st = assignment;
+			st = asgn;
 		} else {
 			st->type = ST_IDENTIFIER;
 			identifier* id = &st->value_identifier;
