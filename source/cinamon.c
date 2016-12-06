@@ -55,9 +55,13 @@ typedef u32 b32;
 	META_ENUM_MEMBER(TK_DOT) \
 	META_ENUM_MEMBER(TK_COMMA) \
 	META_ENUM_MEMBER(TK_HASH) \
+	META_ENUM_MEMBER(TK_ADD) \
+	META_ENUM_MEMBER(TK_SUB) \
+	META_ENUM_MEMBER(TK_MUL) \
+	META_ENUM_MEMBER(TK_DIV) \
 	META_ENUM_MEMBER(TK_EQUALS) \
 	META_ENUM_MEMBER(TK_ARROW) \
-	META_ENUM_MEMBER(TK_UNKNOWN) \
+	META_ENUM_MEMBER(TK_UNKNOWN)
 
 #define META_STATEMENT_TYPE_MEMBERS \
 	META_ENUM_MEMBER(ST_LITERAL_STR) \
@@ -69,7 +73,16 @@ typedef u32 b32;
 	META_ENUM_MEMBER(ST_FN_CALL) \
 	META_ENUM_MEMBER(ST_IDENTIFIER) \
 	META_ENUM_MEMBER(ST_ASSIGNMENT) \
-	META_ENUM_MEMBER(ST_UNKNOWN) \
+	META_ENUM_MEMBER(ST_BINARY_OP) \
+	META_ENUM_MEMBER(ST_VOID) \
+	META_ENUM_MEMBER(ST_UNKNOWN)
+
+#define META_BINARY_OP_TYPE_MEMBERS \
+	META_ENUM_MEMBER(BO_ADD) \
+	META_ENUM_MEMBER(BO_SUB) \
+	META_ENUM_MEMBER(BO_MUL) \
+	META_ENUM_MEMBER(BO_DIV) \
+	META_ENUM_MEMBER(BO_ASSIGNMENT)
 
 #define META_VARIABLE_TYPE_MEMBERS \
 	META_ENUM_MEMBER(VT_VOID) \
@@ -81,6 +94,7 @@ typedef u32 b32;
 
 META_EMIT_ENUM_SIGNATURE(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
+META_EMIT_ENUM_SIGNATURE(META_BINARY_OP_TYPE_MEMBERS, BINARY_OP_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
 /***************************ENUM TO STRING FUNCTIONS***************************/
@@ -100,6 +114,7 @@ META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
 META_EMIT_ENUM_TO_STR_FN(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
+META_EMIT_ENUM_TO_STR_FN(META_BINARY_OP_TYPE_MEMBERS, BINARY_OP_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
 /*********************************END OF ENUMS*********************************/
@@ -253,6 +268,14 @@ token next_token(source_ctx* ctx) {
 		tk.type = TK_ARROW;
 		tk.str.len = 2;
 		forward(ctx);
+	} else if (*sym.at == '+') {
+		tk.type = TK_ADD;
+	} else if (*sym.at == '-') {
+		tk.type = TK_SUB;
+	} else if (*sym.at == '*') {
+		tk.type = TK_MUL;
+	} else if (*sym.at == '/') {
+		tk.type = TK_DIV;
 	} else if (is_digit_sym(*sym.at)) {
 		tk.type = TK_NUMBER;
 		b32 decimal_point_present = false;
@@ -360,6 +383,12 @@ typedef struct {
 	string name;
 } identifier;
 
+typedef struct {
+	BINARY_OP_TYPE type;
+	struct statement* left_hand;
+	struct statement* right_hand;
+} binary_op;
+
 typedef struct statement {
 	STATEMENT_TYPE type;
 
@@ -374,6 +403,7 @@ typedef struct statement {
 		function_call value_fn_call;
 
 		assignment value_assignment;
+		binary_op value_binary_op;
 
 		identifier value_identifier;
 	};
@@ -402,7 +432,54 @@ statement* malloc_statement(STATEMENT_TYPE type) {
 	return result;
 }
 
+b32 is_token_binary_op(TOKEN_TYPE tt) {
+	return tt == TK_ADD || tt == TK_SUB || tt == TK_MUL || tt == TK_DIV || tt == TK_EQUALS;
+}
+
+BINARY_OP_TYPE token_type_2_binary_op_type(TOKEN_TYPE tt) {
+	switch (tt) {
+		case TK_ADD:
+			return BO_ADD;
+		case TK_SUB:
+			return BO_SUB;
+		case TK_MUL:
+			return BO_MUL;
+		case TK_DIV:
+			return BO_DIV;
+		case TK_EQUALS:
+			return BO_ASSIGNMENT;
+	}
+
+	assert(0 && "unexpected token type!");
+	return ST_UNKNOWN;
+}
+
 statement* parse_statement(source_ctx* ctx) {
+	statement* st = malloc_statement(ST_VOID);
+	token tk = next_token(ctx);
+	if (tk.type == TK_NUMBER) {
+		// TODO: actual number parsing instead of this bullshit
+		st->type = ST_LITERAL_S32;
+		st->value_s32 = atoi(tk.str.at);
+	}
+
+	tk = next_token(ctx);
+	if (is_token_binary_op(tk.type)) {
+		statement* left_hand = st;
+		st = malloc_statement(ST_BINARY_OP);
+		binary_op* bop = &st->value_binary_op;
+		bop->type = token_type_2_binary_op_type(tk.type);
+		bop->left_hand = left_hand;
+		bop->right_hand = parse_statement(ctx);
+	} else {
+		// end of statement
+		assert(tk.type == TK_SEMICOLON);
+	}
+
+	return st;
+}
+
+statement* parse_statement_old(source_ctx* ctx) {
 	statement* st = malloc_statement(ST_UNKNOWN);
 	token tk = next_token(ctx);
 	if (tk.type == TK_IDENTIFIER) {
@@ -494,6 +571,45 @@ statement* parse_statement(source_ctx* ctx) {
 }
 
 void print_ast(statement* root) {
+	if (root->type == ST_LITERAL_S32) {
+		printf("%d", root->value_s32);
+	} else if (root->type == ST_LITERAL_U32) {
+		printf("%u", root->value_u32);
+	} else if (root->type == ST_LITERAL_STR) {
+		printf("\"%.*s\"", root->value_str.len, root->value_str.at);
+	} else if (root->type == ST_BINARY_OP) {
+		binary_op* bop = &root->value_binary_op;
+		if (bop->left_hand->type == ST_BINARY_OP) {
+			printf("(");
+		}
+		print_ast(bop->left_hand);
+		if (bop->left_hand->type == ST_BINARY_OP) {
+			printf(")");
+		}
+		if (bop->type == BO_ADD) {
+			printf(" + ");
+		} else if (bop->type == BO_SUB) {
+			printf(" - ");
+		} else if (bop->type == BO_MUL) {
+			printf(" * ");
+		} else if (bop->type == BO_DIV) {
+			printf(" / ");
+		} else if (bop->type == BO_ASSIGNMENT) {
+			printf(" = ");
+		} else {
+			printf(" {unknown binary op} ");
+		}
+		if (bop->right_hand->type == ST_BINARY_OP) {
+			printf("(");
+		}
+		print_ast(bop->right_hand);
+		if (bop->right_hand->type == ST_BINARY_OP) {
+			printf(")");
+		}
+	}
+}
+
+void print_ast_old(statement* root) {
 	if (root->type == ST_LITERAL_S32) {
 		printf("%d", root->value_s32);
 	} else if (root->type == ST_LITERAL_U32) {
