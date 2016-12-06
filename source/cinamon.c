@@ -454,23 +454,90 @@ BINARY_OP_TYPE token_type_2_binary_op_type(TOKEN_TYPE tt) {
 	return ST_UNKNOWN;
 }
 
-statement* parse_statement(source_ctx* ctx) {
-	statement* st = malloc_statement(ST_VOID);
-	token tk = next_token(ctx);
-	if (tk.type == TK_NUMBER) {
-		// TODO: actual number parsing instead of this bullshit
-		st->type = ST_LITERAL_S32;
-		st->value_s32 = atoi(tk.str.at);
+int get_binary_op_priority(BINARY_OP_TYPE type) {
+	switch (type) {
+		case BO_ASSIGNMENT:
+			return 0;
+		case BO_ADD:
+		case BO_SUB:
+			return 1;
+		case BO_MUL:
+		case BO_DIV:
+			return 2;
 	}
 
-	tk = next_token(ctx);
+	assert(0 && "unexpected binary operator type!");
+	return -1;
+}
+
+typedef struct {
+	token* tokens;
+	token* at;
+} parse_ctx;
+
+token get_token(parse_ctx* ctx, int offset) {
+	token* at = ctx->at + offset;
+	assert(at >= ctx->tokens);
+	assert(at - ctx->tokens < stb_arr_len(ctx->tokens));
+	return *at;
+}
+
+token advance(parse_ctx* ctx) {
+	token tk = *ctx->at;
+	++ctx->at;
+	assert(ctx->at >= ctx->tokens);
+	assert(ctx->at - ctx->tokens < stb_arr_len(ctx->tokens));
+	return tk;
+}
+
+statement* parse_statement(parse_ctx* ctx);
+
+statement* parse_number(parse_ctx* ctx) {
+	// TODO: actual number parsing instead of this bullshit
+	token tk = advance(ctx);
+	assert(tk.type == TK_NUMBER);
+	statement* st = malloc_statement(ST_LITERAL_S32);
+	st->value_s32 = atoi(tk.str.at);
+	return st;
+}
+
+statement* parse_binary_operator(parse_ctx* ctx, statement* left_hand) {
+	token tk = advance(ctx);
+	assert(is_token_binary_op(tk.type));
+
+	statement* st = malloc_statement(ST_BINARY_OP);
+	binary_op* bop = &st->value_binary_op;
+	bop->type = token_type_2_binary_op_type(tk.type);
+	bop->left_hand = left_hand;
+
+	if (get_token(ctx, 0).type != TK_SEMICOLON &&
+		is_token_binary_op(get_token(ctx, 1).type) &&
+		get_binary_op_priority(bop->type) >= get_binary_op_priority(token_type_2_binary_op_type(get_token(ctx, 1).type))) {
+		bop->right_hand = parse_number(ctx);
+		statement* next_op = parse_binary_operator(ctx, st);
+		st = next_op;
+	} else {
+		bop->right_hand = parse_statement(ctx);
+	}
+
+	return st;
+}
+
+statement* parse_statement(parse_ctx* ctx) {
+	if (get_token(ctx, 0).type == TK_EOF) {
+		return 0;
+	}
+
+	statement* st = 0;
+	token tk = get_token(ctx, 0);
+	if (tk.type == TK_NUMBER) {
+		st = parse_number(ctx);
+	}
+
+	tk = get_token(ctx, 0);
 	if (is_token_binary_op(tk.type)) {
 		statement* left_hand = st;
-		st = malloc_statement(ST_BINARY_OP);
-		binary_op* bop = &st->value_binary_op;
-		bop->type = token_type_2_binary_op_type(tk.type);
-		bop->left_hand = left_hand;
-		bop->right_hand = parse_statement(ctx);
+		st = parse_binary_operator(ctx, left_hand);
 	} else {
 		// end of statement
 		assert(tk.type == TK_SEMICOLON);
@@ -479,6 +546,7 @@ statement* parse_statement(source_ctx* ctx) {
 	return st;
 }
 
+#if 0
 statement* parse_statement_old(source_ctx* ctx) {
 	statement* st = malloc_statement(ST_UNKNOWN);
 	token tk = next_token(ctx);
@@ -512,7 +580,7 @@ statement* parse_statement_old(source_ctx* ctx) {
 						break;
 					}
 
-					stb_arr_push(f->statements, parse_statement(ctx));
+					stb_arr_push(f->statements, parse_statement_old(ctx));
 				}
 				require_token(ctx, TK_RBRACE);
 			} else if (is_primitive(tk.type)) { // primitive type
@@ -530,14 +598,14 @@ statement* parse_statement_old(source_ctx* ctx) {
 			f->name = id_token.str;
 			tk = peek_token(*ctx);
 			if (tk.type != TK_RPAREN) {
-				stb_arr_push(f->parameters, parse_statement(ctx));
+				stb_arr_push(f->parameters, parse_statement_old(ctx));
 				while (true) {
 					tk = peek_token(*ctx);
 					if (tk.type == TK_RPAREN) {
 						break;
 					} else {
 						require_token(ctx, TK_COMMA);
-						stb_arr_push(f->parameters, parse_statement(ctx));
+						stb_arr_push(f->parameters, parse_statement_old(ctx));
 					}
 				}
 			}
@@ -550,7 +618,7 @@ statement* parse_statement_old(source_ctx* ctx) {
 			statement* asgn = malloc_statement(ST_ASSIGNMENT);
 			assignment* a = &asgn->value_assignment;
 			a->left_hand = st;
-			a->right_hand = parse_statement(ctx);
+			a->right_hand = parse_statement_old(ctx);
 			require_token(ctx, TK_SEMICOLON);
 			st = asgn;
 		} else {
@@ -569,6 +637,7 @@ statement* parse_statement_old(source_ctx* ctx) {
 
 	return st;
 }
+#endif
 
 void print_ast(statement* root) {
 	if (root->type == ST_LITERAL_S32) {
@@ -609,6 +678,7 @@ void print_ast(statement* root) {
 	}
 }
 
+#if 0
 void print_ast_old(statement* root) {
 	if (root->type == ST_LITERAL_S32) {
 		printf("%d", root->value_s32);
@@ -670,30 +740,37 @@ void print_ast_old(statement* root) {
 		printf("{unknown node type}");
 	}
 }
+#endif
 
 int main(int argc, char** argv) {
 	char* source = load_text_file("test.cn");
 	assert(source);
 
 	source_ctx ctx = { .source = source, .at = source, .iline = 0, .icol = 0 };
+	token* tokens = 0;
 	token tk;
-#if 0 // print all tokens
-	printf("#if 0\n");
 	do {
 		tk = next_token(&ctx);
+		stb_arr_push(tokens, tk);
+	} while (tk.type != TK_EOF);
+
+#if 0 // print all tokens
+	printf("#if 0\n");
+	for (int i = 0; i < stb_arr_len(tokens); ++i) {
+		tk = tokens[i];
 		printf("%3d:%-3d %-15s %.*s\n", tk.iline + 1, tk.icol + 1, TOKEN_TYPE_STR(tk.type),
 				tk.str.len, tk.str.at);
-	} while (tk.type != TK_EOF);
+	}
 	printf("#endif\n");
 #endif
 
 #if 1
-	ctx = (source_ctx){ .source = source, .at = source, .iline = 0, .icol = 0 };
-	tk = peek_token(ctx);
 	statement** statements = 0;
-	while (tk.type != TK_EOF) {
-		stb_arr_push(statements, parse_statement(&ctx));
-		tk = peek_token(ctx);
+	parse_ctx pctx = { .tokens = tokens, .at = tokens };
+	statement* st = parse_statement(&pctx);
+	while (st) {
+		stb_arr_push(statements, st);
+		st = parse_statement(&pctx);
 	}
 #endif
 
