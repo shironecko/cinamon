@@ -762,7 +762,12 @@ void print_ast_old(statement* root) {
 #endif
 
 int main(int argc, char** argv) {
-	char* source = load_text_file("test.cn");
+	char* source_path = "test.cn";
+	if (argc > 1) {
+		source_path = argv[1];
+	}
+
+	char* source = load_text_file(source_path);
 	assert(source);
 
 	source_ctx ctx = { .source = source, .at = source, .iline = 0, .icol = 0 };
