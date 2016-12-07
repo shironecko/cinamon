@@ -501,6 +501,19 @@ statement* parse_number(parse_ctx* ctx) {
 	return st;
 }
 
+statement* parse_factor(parse_ctx* ctx) {
+	token tk = get_token(ctx, 0);
+	if (tk.type == TK_NUMBER) {
+		return parse_number(ctx);
+	} else if (tk.type == TK_LPAREN) {
+		advance(ctx);
+		return parse_statement(ctx);
+	} else {
+		assert(0 && "unexpected token!");
+		return 0;
+	}
+}
+
 statement* parse_binary_operator(parse_ctx* ctx, statement* left_hand) {
 	token tk = advance(ctx);
 	assert(is_token_binary_op(tk.type));
@@ -510,14 +523,23 @@ statement* parse_binary_operator(parse_ctx* ctx, statement* left_hand) {
 	bop->type = token_type_2_binary_op_type(tk.type);
 	bop->left_hand = left_hand;
 
-	if (get_token(ctx, 0).type != TK_SEMICOLON &&
-		is_token_binary_op(get_token(ctx, 1).type) &&
-		get_binary_op_priority(bop->type) >= get_binary_op_priority(token_type_2_binary_op_type(get_token(ctx, 1).type))) {
-		bop->right_hand = parse_number(ctx);
-		statement* next_op = parse_binary_operator(ctx, st);
-		st = next_op;
+	statement* right_hand = parse_factor(ctx);
+
+	tk = get_token(ctx, 0);
+	if (is_token_binary_op(tk.type)) {
+		if (get_binary_op_priority(bop->type) >= get_binary_op_priority(token_type_2_binary_op_type(tk.type))) {
+			bop->right_hand = right_hand;
+			statement* next_op = parse_binary_operator(ctx, st);
+			st = next_op;
+		} else {
+			bop->right_hand = parse_binary_operator(ctx, right_hand);
+		}
 	} else {
-		bop->right_hand = parse_statement(ctx);
+		bop->right_hand = right_hand;
+	}
+
+	if (tk.type == TK_SEMICOLON || tk.type == TK_RPAREN) {
+		advance(ctx);
 	}
 
 	return st;
@@ -528,19 +550,16 @@ statement* parse_statement(parse_ctx* ctx) {
 		return 0;
 	}
 
-	statement* st = 0;
-	token tk = get_token(ctx, 0);
-	if (tk.type == TK_NUMBER) {
-		st = parse_number(ctx);
-	}
+	statement* st = parse_factor(ctx);
 
-	tk = get_token(ctx, 0);
+	token tk = get_token(ctx, 0);
 	if (is_token_binary_op(tk.type)) {
 		statement* left_hand = st;
 		st = parse_binary_operator(ctx, left_hand);
 	} else {
 		// end of statement
-		assert(tk.type == TK_SEMICOLON);
+		assert(tk.type == TK_SEMICOLON || tk.type == TK_RPAREN);
+		advance(ctx);
 	}
 
 	return st;
