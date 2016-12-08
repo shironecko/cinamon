@@ -515,27 +515,39 @@ statement* parse_factor(parse_ctx* ctx) {
 }
 
 statement* parse_binary_operator(parse_ctx* ctx, statement* previous_bop, statement* left_hand) {
+	// what follows is a fucking recursive nightmare of managing precedence
+	// this code was born in a great struggle
+	// you have been warned
 	token tk = advance(ctx);
 	assert(is_token_binary_op(tk.type));
 
-	statement* st = malloc_statement(ST_BINARY_OP);
+	statement* st, *original_st;
+	st = original_st = malloc_statement(ST_BINARY_OP);
 	binary_op* bop = &st->value_binary_op;
 	bop->type = token_type_2_binary_op_type(tk.type);
 	bop->left_hand = left_hand;
-
-	if (previous_bop) {
-		assert(!previous_bop->value_binary_op.right_hand);
-		previous_bop->value_binary_op.right_hand = st;
-		st = previous_bop;
-	}
+	
+    if (previous_bop) {
+        previous_bop->value_binary_op.right_hand = st;
+        st = previous_bop;
+    }
 
 	statement* right_hand = parse_factor(ctx);
 	tk = get_token(ctx, 0);
 	if (is_token_binary_op(tk.type)) { // another binary operator ahead, take care of the precedence
-		if (get_binary_op_priority(bop->type) >= get_binary_op_priority(token_type_2_binary_op_type(tk.type))) {
+		int current_priority = get_binary_op_priority(bop->type);
+		int next_priority = get_binary_op_priority(token_type_2_binary_op_type(tk.type));
+		if (current_priority > next_priority) {
 			bop->right_hand = right_hand;
 			statement* next_op = parse_binary_operator(ctx, 0, st);
 			st = next_op;
+		} else if (current_priority == next_priority) {
+			bop->right_hand = right_hand;
+			if (previous_bop) {
+				st = parse_binary_operator(ctx, st, original_st);
+			} else {
+				st = parse_binary_operator(ctx, 0, st);
+			}
 		} else {
 			st = parse_binary_operator(ctx, st, right_hand);
 		}
