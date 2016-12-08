@@ -514,7 +514,7 @@ statement* parse_factor(parse_ctx* ctx) {
 	}
 }
 
-statement* parse_binary_operator(parse_ctx* ctx, statement* left_hand) {
+statement* parse_binary_operator(parse_ctx* ctx, statement* previous_bop, statement* left_hand) {
 	token tk = advance(ctx);
 	assert(is_token_binary_op(tk.type));
 
@@ -523,18 +523,23 @@ statement* parse_binary_operator(parse_ctx* ctx, statement* left_hand) {
 	bop->type = token_type_2_binary_op_type(tk.type);
 	bop->left_hand = left_hand;
 
-	statement* right_hand = parse_factor(ctx);
+	if (previous_bop) {
+		assert(!previous_bop->value_binary_op.right_hand);
+		previous_bop->value_binary_op.right_hand = st;
+		st = previous_bop;
+	}
 
+	statement* right_hand = parse_factor(ctx);
 	tk = get_token(ctx, 0);
-	if (is_token_binary_op(tk.type)) {
+	if (is_token_binary_op(tk.type)) { // another binary operator ahead, take care of the precedence
 		if (get_binary_op_priority(bop->type) >= get_binary_op_priority(token_type_2_binary_op_type(tk.type))) {
 			bop->right_hand = right_hand;
-			statement* next_op = parse_binary_operator(ctx, st);
+			statement* next_op = parse_binary_operator(ctx, 0, st);
 			st = next_op;
 		} else {
-			bop->right_hand = parse_binary_operator(ctx, right_hand);
+			st = parse_binary_operator(ctx, st, right_hand);
 		}
-	} else {
+	} else { // end of binary operators chain
 		bop->right_hand = right_hand;
 	}
 
@@ -555,7 +560,7 @@ statement* parse_statement(parse_ctx* ctx) {
 	token tk = get_token(ctx, 0);
 	if (is_token_binary_op(tk.type)) {
 		statement* left_hand = st;
-		st = parse_binary_operator(ctx, left_hand);
+		st = parse_binary_operator(ctx, 0, left_hand);
 	} else {
 		// end of statement
 		assert(tk.type == TK_SEMICOLON || tk.type == TK_RPAREN);
