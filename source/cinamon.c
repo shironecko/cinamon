@@ -507,7 +507,10 @@ statement* parse_factor(parse_ctx* ctx) {
 		return parse_number(ctx);
 	} else if (tk.type == TK_LPAREN) {
 		advance(ctx);
-		return parse_statement(ctx);
+		statement* result = parse_statement(ctx);
+        tk = advance(ctx);
+        assert(tk.type == TK_RPAREN);
+        return result;
 	} else {
 		assert(0 && "unexpected token!");
 		return 0;
@@ -555,10 +558,6 @@ statement* parse_binary_operator(parse_ctx* ctx, statement* previous_bop, statem
 		bop->right_hand = right_hand;
 	}
 
-	if (tk.type == TK_SEMICOLON || tk.type == TK_RPAREN) {
-		advance(ctx);
-	}
-
 	return st;
 }
 
@@ -575,8 +574,9 @@ statement* parse_statement(parse_ctx* ctx) {
 		st = parse_binary_operator(ctx, 0, left_hand);
 	} else {
 		// end of statement
-		assert(tk.type == TK_SEMICOLON || tk.type == TK_RPAREN);
-		advance(ctx);
+        /*if (tk.type == TK_SEMICOLON || tk.type == TK_RPAREN) {
+            advance(ctx);
+        }*/
 	}
 
 	return st;
