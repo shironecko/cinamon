@@ -109,7 +109,7 @@ META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 		if (value < nstrings) { \
 			return strings[value]; \
 		} \
-		return "{outside of enum_name range}"; \
+		return "{outside of " #enum_name " range}"; \
 	}
 
 META_EMIT_ENUM_TO_STR_FN(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
@@ -117,22 +117,7 @@ META_EMIT_ENUM_TO_STR_FN(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_BINARY_OP_TYPE_MEMBERS, BINARY_OP_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
-/*********************************END OF ENUMS*********************************/
-
-char* load_text_file(const char* path) {
-	FILE* file = fopen(path, "rb");
-	if (!file)
-		return 0;
-
-	fseek(file, 0, SEEK_END);
-	int file_size = ftell(file);
-	fseek(file, 0, SEEK_SET);
-	char* contents = (char*)malloc(file_size + 1);
-	fread(contents, 1, file_size, file);
-	contents[file_size] = 0;
-	fclose(file);
-	return contents;
-}
+/***************************COMMON DATA TYPES****************************/
 
 typedef struct {
 	char* at;
@@ -140,23 +125,31 @@ typedef struct {
 } string;
 
 typedef struct {
+	string str;
+	TOKEN_TYPE type;
+	int iline, icol;
+} token;
+
+/*********************************LEXING*********************************/
+
+typedef struct {
 	char *source;
 	char *at;
 	int iline, icol;
-} source_ctx;
+} lexing_ctx;
 
 typedef struct {
 	char* at;
 	int iline, icol;
-} symbol;
+} lx_symbol;
 
-symbol current(source_ctx* ctx) {
-	symbol result = { .at = ctx->at, .iline = ctx->iline, .icol = ctx->icol};
+lx_symbol lx_current(lexing_ctx* ctx) {
+	lx_symbol result = { .at = ctx->at, .iline = ctx->iline, .icol = ctx->icol};
 	return result;
 }
 
-symbol next(source_ctx* ctx) {
-	symbol result = { .at = ctx->at + 1, .iline = ctx->iline, .icol = ctx->icol + 1 };
+lx_symbol lx_next(lexing_ctx* ctx) {
+	lx_symbol result = { .at = ctx->at + 1, .iline = ctx->iline, .icol = ctx->icol + 1 };
 	if (*ctx->at == '\n') {
 		++result.iline;
 		result.icol = 0;
@@ -165,24 +158,18 @@ symbol next(source_ctx* ctx) {
 	return result;
 }
 
-symbol forward(source_ctx* ctx) {
-	char current = *ctx->at;
-	assert(current);
+lx_symbol lx_forward(lexing_ctx* ctx) {
+	char lx_current = *ctx->at;
+	assert(lx_current);
 	++ctx->at;
 	++ctx->icol;
-	if (current == '\n') {
+	if (lx_current == '\n') {
 		++ctx->iline;
 		ctx->icol = 0;
 	}
 
-	symbol result = { .at = ctx->at, .iline = ctx->iline, .icol = ctx->icol };
+	lx_symbol result = { .at = ctx->at, .iline = ctx->iline, .icol = ctx->icol };
 	return result;
-}
-
-void forwardn(source_ctx* ctx, int n) {
-	for (int i = 0; i < n; ++i) {
-		forward(ctx);
-	}
 }
 
 b32 is_identifier_first_sym(char c) {
@@ -202,7 +189,7 @@ b32 is_identifier_sym(char c) {
 	return result;
 }
 
-b32 is_digit_sym(char c) {
+b32 lx_is_digit(char c) {
 	return c >= '0' && c <= '9';
 }
 
@@ -211,23 +198,17 @@ b32 is_whitespace(char c) {
 	return result;
 }
 
-void eat_whitespace(source_ctx* ctx) {
-	symbol sym = current(ctx);
+void lx_eat_whitespace(lexing_ctx* ctx) {
+	lx_symbol sym = lx_current(ctx);
 	while (is_whitespace(*sym.at)) { 
-		sym = forward(ctx); 
+		sym = lx_forward(ctx); 
 	}
 }
 
-typedef struct {
-	string str;
-	TOKEN_TYPE type;
-	int iline, icol;
-} token;
+token lx_next_token(lexing_ctx* ctx) {
+	lx_eat_whitespace(ctx);
 
-token next_token(source_ctx* ctx) {
-	eat_whitespace(ctx);
-
-	symbol sym = current(ctx);
+	lx_symbol sym = lx_current(ctx);
 	token tk = { .str = { .at = sym.at, .len = 1 }, .type = TK_UNKNOWN, .iline = sym.iline, .icol = sym.icol };
 	b32 forward_before_returning = true;
 	if (!*sym.at) {
@@ -257,17 +238,17 @@ token next_token(source_ctx* ctx) {
 		tk.type = TK_HASH;
 	} else if (*sym.at == '=') {
 		tk.type = TK_EQUALS;
-	} else if (*sym.at == '/' && *next(ctx).at == '*') {
-		while (!(*current(ctx).at == '*' && *next(ctx).at == '/')) {
-			forward(ctx);
+	} else if (*sym.at == '/' && *lx_next(ctx).at == '*') {
+		while (!(*lx_current(ctx).at == '*' && *lx_next(ctx).at == '/')) {
+			lx_forward(ctx);
 		}
-		forward(ctx); forward(ctx);
+		lx_forward(ctx); lx_forward(ctx);
 		forward_before_returning = false;
-		tk = next_token(ctx);
-	} else if (*sym.at == '-' && *next(ctx).at == '>') {
+		tk = lx_next_token(ctx);
+	} else if (*sym.at == '-' && *lx_next(ctx).at == '>') {
 		tk.type = TK_ARROW;
 		tk.str.len = 2;
-		forward(ctx);
+		lx_forward(ctx);
 	} else if (*sym.at == '+') {
 		tk.type = TK_ADD;
 	} else if (*sym.at == '-') {
@@ -276,19 +257,19 @@ token next_token(source_ctx* ctx) {
 		tk.type = TK_MUL;
 	} else if (*sym.at == '/') {
 		tk.type = TK_DIV;
-	} else if (is_digit_sym(*sym.at)) {
+	} else if (lx_is_digit(*sym.at)) {
 		tk.type = TK_NUMBER;
 		b32 decimal_point_present = false;
-		symbol s;
+		lx_symbol s;
 		while (true) {
-			s = forward(ctx);
+			s = lx_forward(ctx);
 			if (*s.at == '.') {
 				assert(!decimal_point_present);
 				decimal_point_present = true;
-				s = forward(ctx);
+				s = lx_forward(ctx);
 			}
 
-			if (!is_digit_sym(*s.at)) {
+			if (!lx_is_digit(*s.at)) {
 				break;
 			}
 		}
@@ -297,15 +278,15 @@ token next_token(source_ctx* ctx) {
 		forward_before_returning = false;
 	} else if (*sym.at == '"') {
 		tk.type = TK_STRING;
-		symbol s;
-		s = forward(ctx);
+		lx_symbol s;
+		s = lx_forward(ctx);
 		tk.str.at = s.at;
-		while (*s.at != '"') { s = forward(ctx); } 
+		while (*s.at != '"') { s = lx_forward(ctx); } 
 		tk.str.len = s.at - sym.at - 1;
 	} else if (is_identifier_first_sym(*sym.at)) {
 		tk.type = TK_IDENTIFIER;
-		symbol s;
-		do { s = forward(ctx); } while (is_identifier_sym(*s.at));
+		lx_symbol s;
+		do { s = lx_forward(ctx); } while (is_identifier_sym(*s.at));
 		tk.str.len = s.at - sym.at;
 		forward_before_returning = false;
 
@@ -323,22 +304,25 @@ token next_token(source_ctx* ctx) {
 	}
 
 	if (forward_before_returning) {
-		forward(ctx);
+		lx_forward(ctx);
 	}
 
 	return tk;
 }
 
-token peek_token(source_ctx ctx) {
-	return next_token(&ctx);
+token* lx_parse_all_tokens(char* source_code) {
+	lexing_ctx ctx = { .source = source_code, .at = source_code, .iline = 0, .icol = 0 };
+	token* tokens = 0;
+	token tk;
+	do {
+		tk = lx_next_token(&ctx);
+		stb_arr_push(tokens, tk);
+	} while (tk.type != TK_EOF);
+
+	return tokens;
 }
 
-token require_token(source_ctx* ctx, TOKEN_TYPE required_type) {
-	token tk = next_token(ctx);
-	assert(tk.type == required_type);
-	return tk;
-}
-
+/*********************************PARSING*********************************/
 
 typedef struct {
 	VARIABLE_TYPE type;
@@ -409,10 +393,6 @@ typedef struct statement {
 	};
 } statement;
 
-#define MAX_FUNCTIONS 1024
-#define MAX_FUNCTION_STATEMENTS (1024 * 1024)
-#define MAX_FUNCTION_PARAMETERS 64
-
 function_sig* construct_function_sig(function_sig* f) {
 	*f = (function_sig){0};
 	return f;
@@ -475,14 +455,14 @@ typedef struct {
 	token* at;
 } parse_ctx;
 
-token get_token(parse_ctx* ctx, int offset) {
+token peek_token(parse_ctx* ctx, int offset) {
 	token* at = ctx->at + offset;
 	assert(at >= ctx->tokens);
 	assert(at - ctx->tokens < stb_arr_len(ctx->tokens));
 	return *at;
 }
 
-token advance(parse_ctx* ctx) {
+token next_token(parse_ctx* ctx) {
 	token tk = *ctx->at;
 	++ctx->at;
 	assert(ctx->at >= ctx->tokens);
@@ -490,26 +470,45 @@ token advance(parse_ctx* ctx) {
 	return tk;
 }
 
+token require_token(parse_ctx* ctx, TOKEN_TYPE required_type) {
+	token tk = next_token(ctx);
+	assert(tk.type == required_type);
+	if (tk.type != required_type) {
+		exit(1);
+	}
+	return tk;
+}
+
 statement* parse_statement(parse_ctx* ctx);
 
 statement* parse_number(parse_ctx* ctx) {
 	// TODO: actual number parsing instead of this bullshit
-	token tk = advance(ctx);
-	assert(tk.type == TK_NUMBER);
+	token tk = require_token(ctx, TK_NUMBER);
 	statement* st = malloc_statement(ST_LITERAL_S32);
 	st->value_s32 = atoi(tk.str.at);
 	return st;
 }
 
+statement* parse_variable_sig(parse_ctx* ctx) {
+	return 0;
+}
+
 statement* parse_factor(parse_ctx* ctx) {
-	token tk = get_token(ctx, 0);
+	token tk = peek_token(ctx, 0);
 	if (tk.type == TK_NUMBER) {
 		return parse_number(ctx);
+	} else if (tk.type == TK_IDENTIFIER) {
+		tk = peek_token(ctx, 1);
+		if (tk.type == TK_SEMICOLON) {
+			return parse_variable_sig(ctx);
+		} else {
+			assert(0 && "unexpected token!");
+			return 0;
+		}
 	} else if (tk.type == TK_LPAREN) {
-		advance(ctx);
+		next_token(ctx);
 		statement* result = parse_statement(ctx);
-        tk = advance(ctx);
-        assert(tk.type == TK_RPAREN);
+        tk = require_token(ctx, TK_RPAREN);
         return result;
 	} else {
 		assert(0 && "unexpected token!");
@@ -521,7 +520,7 @@ statement* parse_binary_operator(parse_ctx* ctx, statement* previous_bop, statem
 	// what follows is a fucking recursive nightmare of managing precedence
 	// this code was born in a great struggle
 	// you have been warned
-	token tk = advance(ctx);
+	token tk = next_token(ctx);
 	assert(is_token_binary_op(tk.type));
 
 	statement* st, *original_st;
@@ -536,7 +535,7 @@ statement* parse_binary_operator(parse_ctx* ctx, statement* previous_bop, statem
     }
 
 	statement* right_hand = parse_factor(ctx);
-	tk = get_token(ctx, 0);
+	tk = peek_token(ctx, 0);
 	if (is_token_binary_op(tk.type)) { // another binary operator ahead, take care of the precedence
 		int current_priority = get_binary_op_priority(bop->type);
 		int next_priority = get_binary_op_priority(token_type_2_binary_op_type(tk.type));
@@ -562,28 +561,36 @@ statement* parse_binary_operator(parse_ctx* ctx, statement* previous_bop, statem
 }
 
 statement* parse_statement(parse_ctx* ctx) {
-	if (get_token(ctx, 0).type == TK_EOF) {
+	if (peek_token(ctx, 0).type == TK_EOF) {
 		return 0;
 	}
 
 	statement* st = parse_factor(ctx);
 
-	token tk = get_token(ctx, 0);
+	token tk = peek_token(ctx, 0);
 	if (is_token_binary_op(tk.type)) {
 		statement* left_hand = st;
 		st = parse_binary_operator(ctx, 0, left_hand);
 	} else {
 		// end of statement
         /*if (tk.type == TK_SEMICOLON || tk.type == TK_RPAREN) {
-            advance(ctx);
+            next_token(ctx);
         }*/
 	}
 
 	return st;
 }
 
+statement* parse(parse_ctx* ctx) {
+	statement* st = parse_statement(ctx);
+	if (st) {
+		token tk = require_token(ctx, TK_SEMICOLON);
+	}
+	return st;
+}
+
 #if 0
-statement* parse_statement_old(source_ctx* ctx) {
+statement* parse_statement_old(lexing_ctx* ctx) {
 	statement* st = malloc_statement(ST_UNKNOWN);
 	token tk = next_token(ctx);
 	if (tk.type == TK_IDENTIFIER) {
@@ -778,6 +785,21 @@ void print_ast_old(statement* root) {
 }
 #endif
 
+char* load_text_file(const char* path) {
+	FILE* file = fopen(path, "rb");
+	if (!file)
+		return 0;
+
+	fseek(file, 0, SEEK_END);
+	int file_size = ftell(file);
+	fseek(file, 0, SEEK_SET);
+	char* contents = (char*)malloc(file_size + 1);
+	fread(contents, 1, file_size, file);
+	contents[file_size] = 0;
+	fclose(file);
+	return contents;
+}
+
 int main(int argc, char** argv) {
 	char* source_path = "test.cn";
 	if (argc > 1) {
@@ -786,19 +808,12 @@ int main(int argc, char** argv) {
 
 	char* source = load_text_file(source_path);
 	assert(source);
-
-	source_ctx ctx = { .source = source, .at = source, .iline = 0, .icol = 0 };
-	token* tokens = 0;
-	token tk;
-	do {
-		tk = next_token(&ctx);
-		stb_arr_push(tokens, tk);
-	} while (tk.type != TK_EOF);
+	token* tokens = lx_parse_all_tokens(source);
 
 #if 0 // print all tokens
 	printf("#if 0\n");
 	for (int i = 0; i < stb_arr_len(tokens); ++i) {
-		tk = tokens[i];
+		token tk = tokens[i];
 		printf("%3d:%-3d %-15s %.*s\n", tk.iline + 1, tk.icol + 1, TOKEN_TYPE_STR(tk.type),
 				tk.str.len, tk.str.at);
 	}
@@ -808,10 +823,10 @@ int main(int argc, char** argv) {
 #if 1
 	statement** statements = 0;
 	parse_ctx pctx = { .tokens = tokens, .at = tokens };
-	statement* st = parse_statement(&pctx);
+	statement* st = parse(&pctx);
 	while (st) {
 		stb_arr_push(statements, st);
-		st = parse_statement(&pctx);
+		st = parse(&pctx);
 	}
 #endif
 
