@@ -490,7 +490,19 @@ statement* parse_number(parse_ctx* ctx) {
 }
 
 statement* parse_variable_sig(parse_ctx* ctx) {
-	return 0;
+	token tk = require_token(ctx, TK_IDENTIFIER);
+	statement* st = malloc_statement(ST_VAR_DECL);
+	variable_sig* decl = &st->value_var_decl;
+	decl->name = tk.str;
+	require_token(ctx, TK_COLON);
+	tk = next_token(ctx);
+	if (is_primitive(tk.type)) {
+		decl->type = token_type_2_variable_type(tk.type);
+	} else {
+		assert(0 && "unexpected variable type!");
+	}
+
+	return st;
 }
 
 statement* parse_factor(parse_ctx* ctx) {
@@ -499,7 +511,7 @@ statement* parse_factor(parse_ctx* ctx) {
 		return parse_number(ctx);
 	} else if (tk.type == TK_IDENTIFIER) {
 		tk = peek_token(ctx, 1);
-		if (tk.type == TK_SEMICOLON) {
+		if (tk.type == TK_COLON) {
 			return parse_variable_sig(ctx);
 		} else {
 			assert(0 && "unexpected token!");
@@ -689,6 +701,24 @@ void print_ast(statement* root) {
 		printf("%u", root->value_u32);
 	} else if (root->type == ST_LITERAL_STR) {
 		printf("\"%.*s\"", root->value_str.len, root->value_str.at);
+	} else if (root->type == ST_VAR_DECL) {
+		variable_sig* var = &root->value_var_decl;
+		printf("%.*s : ", var->name.len, var->name.at);
+		switch (var->type) {
+			case VT_S32: {
+				printf("s32");
+			} break;
+			case VT_U32: {
+				printf("u32");
+			} break;
+			case VT_STRUCT:
+			case VT_ENUM: {
+				printf("%.*s", var->custom_type_name.len, var->custom_type_name.at);
+			} break;
+			default: {
+				printf("{unknown var type}");
+			} break;
+		}
 	} else if (root->type == ST_BINARY_OP) {
 		binary_op* bop = &root->value_binary_op;
 		if (bop->left_hand->type == ST_BINARY_OP) {
