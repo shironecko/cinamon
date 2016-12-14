@@ -466,7 +466,7 @@ token next_token(parse_ctx* ctx) {
 	token tk = *ctx->at;
 	++ctx->at;
 	assert(ctx->at >= ctx->tokens);
-	assert(ctx->at - ctx->tokens < stb_arr_len(ctx->tokens));
+	assert(ctx->at - ctx->tokens <= stb_arr_len(ctx->tokens));
 	return tk;
 }
 
@@ -528,48 +528,38 @@ statement* parse_factor(parse_ctx* ctx) {
 	}
 }
 
-statement* parse_binary_operator(parse_ctx* ctx, statement* previous_bop, statement* left_hand) {
-	// what follows is a fucking recursive nightmare of managing precedence
-	// this code was born in a great struggle
-	// you have been warned
-	token tk = next_token(ctx);
-	assert(is_token_binary_op(tk.type));
-
-	statement* st, *original_st;
-	st = original_st = malloc_statement(ST_BINARY_OP);
-	binary_op* bop = &st->value_binary_op;
-	bop->type = token_type_2_binary_op_type(tk.type);
-	bop->left_hand = left_hand;
-	
-    if (previous_bop) {
-        previous_bop->value_binary_op.right_hand = st;
-        st = previous_bop;
-    }
-
-	statement* right_hand = parse_factor(ctx);
-	tk = peek_token(ctx, 0);
-	if (is_token_binary_op(tk.type)) { // another binary operator ahead, take care of the precedence
-		int current_priority = get_binary_op_priority(bop->type);
-		int next_priority = get_binary_op_priority(token_type_2_binary_op_type(tk.type));
-		if (current_priority > next_priority) {
-			bop->right_hand = right_hand;
-			statement* next_op = parse_binary_operator(ctx, 0, st);
-			st = next_op;
-		} else if (current_priority == next_priority) {
-			bop->right_hand = right_hand;
-			if (previous_bop) {
-				st = parse_binary_operator(ctx, st, original_st);
-			} else {
-				st = parse_binary_operator(ctx, 0, st);
-			}
-		} else {
-			st = parse_binary_operator(ctx, st, right_hand);
+statement* parse_binary_operator_recursive(parse_ctx* ctx, statement* left_hand, int min_precedence) {
+	// precedence climbing algorithm: http://faculty.ycp.edu/~dhovemey/fall2012/cs340/lecture/lecture06.html
+	while (1) {
+		token tk = peek_token(ctx, 0);
+		if (!is_token_binary_op(tk.type) || get_binary_op_priority(token_type_2_binary_op_type(tk.type)) < min_precedence) {
+			break;
 		}
-	} else { // end of binary operators chain
+		next_token(ctx);
+		statement* operator = malloc_statement(ST_BINARY_OP);
+		binary_op* bop = &operator->value_binary_op;
+		bop->type = token_type_2_binary_op_type(tk.type);
+		bop->left_hand = left_hand;
+
+		statement* right_hand = parse_factor(ctx);
+
+		while(1) {
+			tk = peek_token(ctx, 0);
+			if (!is_token_binary_op(tk.type) || get_binary_op_priority(token_type_2_binary_op_type(tk.type)) <= get_binary_op_priority(bop->type)) {
+				break;
+			}
+			right_hand = parse_binary_operator_recursive(ctx, right_hand, get_binary_op_priority(token_type_2_binary_op_type(tk.type)));
+		}
+
 		bop->right_hand = right_hand;
+		left_hand = operator;
 	}
 
-	return st;
+	return left_hand;
+}
+
+statement* parse_binary_operator(parse_ctx* ctx, statement* left_hand) {
+	return parse_binary_operator_recursive(ctx, left_hand, -1);
 }
 
 statement* parse_statement(parse_ctx* ctx) {
@@ -582,7 +572,7 @@ statement* parse_statement(parse_ctx* ctx) {
 	token tk = peek_token(ctx, 0);
 	if (is_token_binary_op(tk.type)) {
 		statement* left_hand = st;
-		st = parse_binary_operator(ctx, 0, left_hand);
+		st = parse_binary_operator(ctx, left_hand);
 	} else {
 		// end of statement
         /*if (tk.type == TK_SEMICOLON || tk.type == TK_RPAREN) {
