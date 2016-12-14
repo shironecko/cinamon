@@ -362,7 +362,7 @@ typedef struct {
 } function_sig;
 
 typedef struct {
-	string name;
+	struct statement* fn_statement;
 	struct statement** parameters;
 } function_call;
 
@@ -485,6 +485,13 @@ statement* parse_number(parse_ctx* ctx) {
 	return st;
 }
 
+statement* parse_string(parse_ctx* ctx) {
+	token tk = require_token(ctx, TK_STRING);
+	statement* st = malloc_statement(ST_LITERAL_STR);
+	st->value_str = tk.str;
+	return st;
+}
+
 type_sig parse_type_sig(parse_ctx* ctx) {
 	type_sig result = {0};
 	token tk = next_token(ctx);
@@ -508,29 +515,58 @@ statement* parse_variable_sig(parse_ctx* ctx) {
 	return st;
 }
 
+statement* parse_fn_call(parse_ctx* ctx, statement* fn_statement) {
+	require_token(ctx, TK_LPAREN);
+	statement* st = malloc_statement(ST_FN_CALL);
+	function_call* fn_call = &st->value_fn_call;
+	fn_call->fn_statement = fn_statement;
+
+	token tk = peek_token(ctx, 0);
+	while (tk.type != TK_RPAREN) {
+		statement* fn_param = parse_statement(ctx);
+		stb_arr_push(fn_call->parameters, fn_param);
+		tk = peek_token(ctx, 0);
+		if (tk.type != TK_RPAREN) {
+			require_token(ctx, TK_COMMA);
+			tk = peek_token(ctx, 0);
+			assert(tk.type != TK_RPAREN);
+		}
+	}
+    require_token(ctx, TK_RPAREN);
+
+	return st;
+}
+
 statement* parse_factor(parse_ctx* ctx) {
+	statement* st = 0;
 	token tk = peek_token(ctx, 0);
 	if (tk.type == TK_NUMBER) {
-		return parse_number(ctx);
+		st = parse_number(ctx);
+	} else if (tk.type == TK_STRING) {
+		st = parse_string(ctx);
 	} else if (tk.type == TK_IDENTIFIER) {
 		tk = peek_token(ctx, 1);
 		if (tk.type == TK_COLON) {
 			return parse_variable_sig(ctx);
 		} else {
             tk = require_token(ctx, TK_IDENTIFIER);
-            statement* st = malloc_statement(ST_IDENTIFIER);
+            st = malloc_statement(ST_IDENTIFIER);
 			st->value_identifier.name = tk.str;
-			return st;
 		}
 	} else if (tk.type == TK_LPAREN) {
 		next_token(ctx);
-		statement* result = parse_statement(ctx);
+		st = parse_statement(ctx);
         tk = require_token(ctx, TK_RPAREN);
-        return result;
 	} else {
 		assert(0 && "unexpected token!");
-		return 0;
 	}
+
+	tk = peek_token(ctx, 0);
+	if (tk.type == TK_LPAREN) {
+		st = parse_fn_call(ctx, st);
+	}
+
+	return st;
 }
 
 statement* parse_binary_operator_recursive(parse_ctx* ctx, statement* left_hand, int min_precedence) {
@@ -572,8 +608,7 @@ statement* parse_statement(parse_ctx* ctx) {
 
 	token tk = peek_token(ctx, 0);
 	if (is_token_binary_op(tk.type)) {
-		statement* left_hand = st;
-		st = parse_binary_operator(ctx, left_hand);
+		st = parse_binary_operator(ctx, st);
 	}
 
 	return st;
@@ -683,6 +718,17 @@ void print_ast(statement* root) {
 			print_ast(f->statements[i]);
 		}
 		printf("\n}\n");
+	} else if (root->type == ST_FN_CALL) {
+		function_call* f = &root->value_fn_call;
+		print_ast(f->fn_statement);
+		printf("(");
+		for (u32 i = 0, n = stb_arr_len(f->parameters); i < n; ++i) {
+			print_ast(f->parameters[i]);
+			if (i != n - 1) {
+				printf(", ");
+			}
+		}
+		printf(")");
 	} else if (root->type == ST_BINARY_OP) {
 		binary_op* bop = &root->value_binary_op;
 		if (bop->left_hand->type == ST_BINARY_OP) {
@@ -713,73 +759,9 @@ void print_ast(statement* root) {
 			printf(")");
 		}
 	} else {
-		printf("{ unknown [%s] }", STATEMENT_TYPE_STR(root->type));
+		printf("{ %s }", STATEMENT_TYPE_STR(root->type));
 	}
 }
-
-#if 0
-void print_ast_old(statement* root) {
-	if (root->type == ST_LITERAL_S32) {
-		printf("%d", root->value_s32);
-	} else if (root->type == ST_LITERAL_U32) {
-		printf("%u", root->value_u32);
-	} else if (root->type == ST_LITERAL_STR) {
-		printf("\"%.*s\"", root->value_str.len, root->value_str.at);
-	} else if (root->type == ST_IDENTIFIER) {
-		printf("%.*s", root->value_identifier.name.len, root->value_identifier.name.at);
-	} else if (root->type == ST_VAR_DECL) {
-		variable_sig* var = &root->value_var_decl;
-		printf("%.*s : ", var->name.len, var->name.at);
-		switch (var->type) {
-			case VT_S32: {
-				printf("s32");
-			} break;
-			case VT_U32: {
-				printf("u32");
-			} break;
-			case VT_STRUCT:
-			case VT_ENUM: {
-				printf("%.*s", var->custom_type_name.len, var->custom_type_name.at);
-			} break;
-			default: {
-				printf("{unknown var type}");
-			} break;
-		}
-	} else if (root->type == ST_FN_DECL) {
-		function_sig* f = &root->value_fn_decl;
-		// TODO: parameters printing
-		printf("%.*s : fn() ", f->name.len, f->name.at);
-		if (f->return_type != VT_VOID) {
-			printf("-> %s ", VARIABLE_TYPE_STR(f->return_type));
-		}
-		printf("{");
-		for (u32 i = 0; i < stb_arr_len(f->statements); ++i) {
-			printf("\n\t");
-			print_ast(f->statements[i]);
-		}
-		printf("\n}\n");
-	} else if (root->type == ST_FN_CALL) {
-		function_call* f = &root->value_fn_call;
-		printf("%.*s(", f->name.len, f->name.at);
-		for (u32 i = 0, n = stb_arr_len(f->parameters); i < n; ++i) {
-			print_ast(f->parameters[i]);
-			if (i != n - 1) {
-				printf(", ");
-			}
-		}
-		printf(")");
-	} else if (root->type == ST_ASSIGNMENT) {
-		assignment* a = &root->value_assignment;
-		print_ast(a->left_hand);
-		printf(" = ");
-		print_ast(a->right_hand);
-	} else if (root->type == ST_UNKNOWN) {
-		printf("ST_UNKNOWN");
-	} else {
-		printf("{unknown node type}");
-	}
-}
-#endif
 
 char* load_text_file(const char* path) {
 	FILE* file = fopen(path, "rb");
