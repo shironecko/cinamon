@@ -38,6 +38,7 @@ typedef u32 b32;
 	META_ENUM_MEMBER(TK_EOF) \
 	META_ENUM_MEMBER(TK_IDENTIFIER) \
 	META_ENUM_MEMBER(TK_FN) \
+	META_ENUM_MEMBER(TK_RETURN) \
 	META_ENUM_MEMBER(TK_STRUCT) \
 	META_ENUM_MEMBER(TK_ENUM) \
 	META_ENUM_MEMBER(TK_U32) \
@@ -55,8 +56,8 @@ typedef u32 b32;
 	META_ENUM_MEMBER(TK_DOT) \
 	META_ENUM_MEMBER(TK_COMMA) \
 	META_ENUM_MEMBER(TK_HASH) \
-	META_ENUM_MEMBER(TK_ADD) \
-	META_ENUM_MEMBER(TK_SUB) \
+	META_ENUM_MEMBER(TK_PLUS) \
+	META_ENUM_MEMBER(TK_MINUS) \
 	META_ENUM_MEMBER(TK_MUL) \
 	META_ENUM_MEMBER(TK_DIV) \
 	META_ENUM_MEMBER(TK_EQUALS) \
@@ -74,15 +75,23 @@ typedef u32 b32;
 	META_ENUM_MEMBER(ST_IDENTIFIER) \
 	META_ENUM_MEMBER(ST_ASSIGNMENT) \
 	META_ENUM_MEMBER(ST_BINARY_OP) \
+	META_ENUM_MEMBER(ST_UNARY_OP) \
 	META_ENUM_MEMBER(ST_VOID) \
 	META_ENUM_MEMBER(ST_UNKNOWN)
 
 #define META_BINARY_OP_TYPE_MEMBERS \
+	META_ENUM_MEMBER(BO_UNKNOWN) \
 	META_ENUM_MEMBER(BO_ADD) \
 	META_ENUM_MEMBER(BO_SUB) \
 	META_ENUM_MEMBER(BO_MUL) \
 	META_ENUM_MEMBER(BO_DIV) \
 	META_ENUM_MEMBER(BO_ASSIGNMENT)
+
+#define META_UNARY_OP_TYPE_MEMBERS \
+	META_ENUM_MEMBER(UO_UNKNOWN) \
+	META_ENUM_MEMBER(UO_POSITIVE) \
+	META_ENUM_MEMBER(UO_NEGATIVE) \
+	META_ENUM_MEMBER(UO_RETURN)
 
 #define META_VARIABLE_TYPE_MEMBERS \
 	META_ENUM_MEMBER(VT_VOID) \
@@ -95,9 +104,10 @@ typedef u32 b32;
 META_EMIT_ENUM_SIGNATURE(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_BINARY_OP_TYPE_MEMBERS, BINARY_OP_TYPE);
+META_EMIT_ENUM_SIGNATURE(META_UNARY_OP_TYPE_MEMBERS, UNARY_OP_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
-/***************************ENUM TO STRING FUNCTIONS***************************/
+/************************ENUM TO STRING FUNCTIONS************************/
 
 #undef META_ENUM_MEMBER
 #define META_ENUM_MEMBER(member_name) #member_name,
@@ -115,6 +125,7 @@ META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_BINARY_OP_TYPE_MEMBERS, BINARY_OP_TYPE);
+META_EMIT_ENUM_TO_STR_FN(META_UNARY_OP_TYPE_MEMBERS, UNARY_OP_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
 
 /***************************COMMON DATA TYPES****************************/
@@ -250,9 +261,9 @@ token lx_next_token(lexing_ctx* ctx) {
 		tk.str.len = 2;
 		lx_forward(ctx);
 	} else if (*sym.at == '+') {
-		tk.type = TK_ADD;
+		tk.type = TK_PLUS;
 	} else if (*sym.at == '-') {
-		tk.type = TK_SUB;
+		tk.type = TK_MINUS;
 	} else if (*sym.at == '*') {
 		tk.type = TK_MUL;
 	} else if (*sym.at == '/') {
@@ -292,6 +303,8 @@ token lx_next_token(lexing_ctx* ctx) {
 
 		if (!strncmp(tk.str.at, "fn", tk.str.len)) {
 			tk.type = TK_FN;
+		} else if (!strncmp(tk.str.at, "return", tk.str.len)) {
+			tk.type = TK_RETURN;
 		} else if (!strncmp(tk.str.at, "struct", tk.str.len)) {
 			tk.type = TK_STRUCT;
 		} else if (!strncmp(tk.str.at, "enum", tk.str.len)) {
@@ -342,6 +355,10 @@ b32 is_token_primitive_type(TOKEN_TYPE type) {
 	return type == TK_S32 || type == TK_U32;
 }
 
+b32 can_token_be_unary_op(TOKEN_TYPE type) {
+	return type == TK_PLUS || type == TK_MINUS || type == TK_RETURN;
+}
+
 VARIABLE_TYPE token_type_2_variable_type(TOKEN_TYPE type) {
 	switch (type) {
 		case TK_S32:
@@ -367,11 +384,6 @@ typedef struct {
 } function_call;
 
 typedef struct {
-	struct statement* left_hand;
-	struct statement* right_hand;
-} assignment;
-
-typedef struct {
 	string name;
 } identifier;
 
@@ -380,6 +392,11 @@ typedef struct {
 	struct statement* left_hand;
 	struct statement* right_hand;
 } binary_op;
+
+typedef struct {
+	UNARY_OP_TYPE type;
+	struct statement* operand;
+} unary_op;
 
 typedef struct statement {
 	STATEMENT_TYPE type;
@@ -394,8 +411,8 @@ typedef struct statement {
 		function_sig value_fn_decl;
 		function_call value_fn_call;
 
-		assignment value_assignment;
 		binary_op value_binary_op;
+		unary_op value_unary_op;
 
 		identifier value_identifier;
 	};
@@ -409,14 +426,14 @@ statement* malloc_statement(STATEMENT_TYPE type) {
 }
 
 b32 is_token_binary_op(TOKEN_TYPE tt) {
-	return tt == TK_ADD || tt == TK_SUB || tt == TK_MUL || tt == TK_DIV || tt == TK_EQUALS;
+	return tt == TK_PLUS || tt == TK_MINUS || tt == TK_MUL || tt == TK_DIV || tt == TK_EQUALS;
 }
 
 BINARY_OP_TYPE token_type_2_binary_op_type(TOKEN_TYPE tt) {
 	switch (tt) {
-		case TK_ADD:
+		case TK_PLUS:
 			return BO_ADD;
-		case TK_SUB:
+		case TK_MINUS:
 			return BO_SUB;
 		case TK_MUL:
 			return BO_MUL;
@@ -427,7 +444,21 @@ BINARY_OP_TYPE token_type_2_binary_op_type(TOKEN_TYPE tt) {
 	}
 
 	assert(0 && "unexpected token type!");
-	return ST_UNKNOWN;
+	return BO_UNKNOWN;
+}
+
+UNARY_OP_TYPE token_type_2_unary_op_type(TOKEN_TYPE tt) {
+	switch (tt) {
+		case TK_PLUS:
+			return UO_POSITIVE;
+		case TK_MINUS:
+			return UO_NEGATIVE;
+		case TK_RETURN:
+			return UO_RETURN;
+	}
+
+	assert(0 && "unexpected token type!");
+	return UO_UNKNOWN;
 }
 
 int get_binary_op_priority(BINARY_OP_TYPE type) {
@@ -537,6 +568,18 @@ statement* parse_fn_call(parse_ctx* ctx, statement* fn_statement) {
 	return st;
 }
 
+statement* parse_factor(parse_ctx* ctx);
+
+statement* parse_unary_op(parse_ctx* ctx) {
+	token tk = next_token(ctx);
+	assert(can_token_be_unary_op(tk.type));
+	statement* st = malloc_statement(ST_UNARY_OP);
+	unary_op* uop = &st->value_unary_op;
+	uop->type = token_type_2_unary_op_type(tk.type);
+	uop->operand = parse_factor(ctx);
+	return st;
+}
+
 statement* parse_factor(parse_ctx* ctx) {
 	statement* st = 0;
 	token tk = peek_token(ctx, 0);
@@ -544,6 +587,8 @@ statement* parse_factor(parse_ctx* ctx) {
 		st = parse_number(ctx);
 	} else if (tk.type == TK_STRING) {
 		st = parse_string(ctx);
+	} else if (can_token_be_unary_op(tk.type)) {
+		st = parse_unary_op(ctx);
 	} else if (tk.type == TK_IDENTIFIER) {
 		tk = peek_token(ctx, 1);
 		if (tk.type == TK_COLON) {
@@ -758,6 +803,18 @@ void print_ast(statement* root) {
 		if (bop->right_hand->type == ST_BINARY_OP) {
 			printf(")");
 		}
+	} else if (root->type == ST_UNARY_OP) {
+		unary_op* uop = &root->value_unary_op;
+		if (uop->type == UO_POSITIVE) {
+			printf("+");
+		} else if (uop->type == UO_NEGATIVE) {
+			printf("-");
+		} else if (uop->type == UO_RETURN) {
+			printf("return");
+		}
+		printf("(");
+		print_ast(uop->operand);
+		printf(")");
 	} else {
 		printf("{ %s }", STATEMENT_TYPE_STR(root->type));
 	}
