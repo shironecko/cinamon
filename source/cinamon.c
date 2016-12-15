@@ -908,13 +908,26 @@ void print_indent(s32 indent, b32 insert_new_line) {
 	}
 }
 
+void print_type(type_signature* type) {
+	printf("%s", SYMBOL_TYPE_STR(type->type));
+	if (type->type == SM_FN) {
+		// TODO: arguments printing
+		printf("()");
+		if (type->fn_signature->return_type.type != SM_VOID) {
+			printf(" -> ");
+			print_type(&type->fn_signature->return_type);
+		}
+	}
+}
+
 print_symbol_table(scope* s, u32 indent) {
 	print_indent(indent, false);
 	printf("%.*s {", s->name.len, s->name.at);
 	for (u32 i = 0; i < stb_arr_len(s->symbols); ++i) {
 		print_indent(indent + 1, true);
 		symbol* sym = s->symbols[i];
-		printf("%.*s : %s", sym->name.len, sym->name.at, SYMBOL_TYPE_STR(sym->type.type));
+		printf("%.*s : ", sym->name.len, sym->name.at);
+		print_type(&sym->type);
 	}
 
 	for (u32 i = 0; i < stb_arr_len(s->children); ++i) {

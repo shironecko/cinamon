@@ -1,7 +1,7 @@
 global {
-	main : fn
-	get_answer : fn
-	do_nothing : fn
+	main : fn() -> s32
+	get_answer : fn() -> s32
+	do_nothing : fn()
 	main {
 		x : u32
 	}
