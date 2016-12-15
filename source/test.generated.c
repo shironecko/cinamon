@@ -1,12 +1,12 @@
 global {
-	main : SM_FN
-	get_answer : SM_FN
-	do_nothing : SM_FN
+	main : fn
+	get_answer : fn
+	do_nothing : fn
 	main {
-		x : SM_U32
+		x : u32
 	}
 	get_answer {
-		result : SM_U32
+		result : u32
 	}
 	do_nothing {
 	}
