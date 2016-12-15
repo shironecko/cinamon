@@ -68,9 +68,9 @@ typedef u32 b32;
 	META_ENUM_MEMBER(ST_LITERAL_STR) \
 	META_ENUM_MEMBER(ST_LITERAL_S32) \
 	META_ENUM_MEMBER(ST_LITERAL_U32) \
-	META_ENUM_MEMBER(ST_VAR_DECL) \
+	META_ENUM_MEMBER(ST_VAR_DEFINITION) \
 	META_ENUM_MEMBER(ST_FN) \
-	META_ENUM_MEMBER(ST_FN_DECL) \
+	META_ENUM_MEMBER(ST_FN_DEFINITION) \
 	META_ENUM_MEMBER(ST_FN_CALL) \
 	META_ENUM_MEMBER(ST_IDENTIFIER) \
 	META_ENUM_MEMBER(ST_ASSIGNMENT) \
@@ -93,19 +93,20 @@ typedef u32 b32;
 	META_ENUM_MEMBER(UO_NEGATIVE) \
 	META_ENUM_MEMBER(UO_RETURN)
 
-#define META_VARIABLE_TYPE_MEMBERS \
-	META_ENUM_MEMBER(VT_VOID) \
-	META_ENUM_MEMBER(VT_S32) \
-	META_ENUM_MEMBER(VT_U32) \
-	META_ENUM_MEMBER(VT_STRUCT) \
-	META_ENUM_MEMBER(VT_ENUM) \
-	META_ENUM_MEMBER(VT_UNKNOWN)
+#define META_SYMBOL_TYPE_MEMBERS \
+	META_ENUM_MEMBER(SM_VOID) \
+	META_ENUM_MEMBER(SM_S32) \
+	META_ENUM_MEMBER(SM_U32) \
+	META_ENUM_MEMBER(SM_STRUCT) \
+	META_ENUM_MEMBER(SM_ENUM) \
+	META_ENUM_MEMBER(SM_FN) \
+	META_ENUM_MEMBER(SM_UNKNOWN)
 
 META_EMIT_ENUM_SIGNATURE(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_BINARY_OP_TYPE_MEMBERS, BINARY_OP_TYPE);
 META_EMIT_ENUM_SIGNATURE(META_UNARY_OP_TYPE_MEMBERS, UNARY_OP_TYPE);
-META_EMIT_ENUM_SIGNATURE(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
+META_EMIT_ENUM_SIGNATURE(META_SYMBOL_TYPE_MEMBERS, SYMBOL_TYPE);
 
 /************************ENUM TO STRING FUNCTIONS************************/
 
@@ -126,7 +127,7 @@ META_EMIT_ENUM_TO_STR_FN(META_TOKEN_TYPE_MEMBERS, TOKEN_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_STATEMENT_TYPE_MEMBERS, STATEMENT_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_BINARY_OP_TYPE_MEMBERS, BINARY_OP_TYPE);
 META_EMIT_ENUM_TO_STR_FN(META_UNARY_OP_TYPE_MEMBERS, UNARY_OP_TYPE);
-META_EMIT_ENUM_TO_STR_FN(META_VARIABLE_TYPE_MEMBERS, VARIABLE_TYPE);
+META_EMIT_ENUM_TO_STR_FN(META_SYMBOL_TYPE_MEMBERS, SYMBOL_TYPE);
 
 /***************************COMMON DATA TYPES****************************/
 
@@ -140,6 +141,11 @@ typedef struct {
 	TOKEN_TYPE type;
 	int iline, icol;
 } token;
+
+string cstring_2_string(char* cstring) {
+	string result = { .at = cstring, .len = strlen(cstring) };
+	return result;
+}
 
 /*********************************LEXING*********************************/
 
@@ -338,17 +344,20 @@ token* lx_parse_all_tokens(char* source_code) {
 /*********************************PARSING*********************************/
 
 typedef struct {
-	VARIABLE_TYPE type;
-	string custom_type_name;
-} type_sig;
+	SYMBOL_TYPE type;
+	union {
+		string custom_type_name;
+		struct fn_signature* fn_signature;
+	};
+} type_signature;
 
 typedef struct {
-	type_sig type;
 	string name;
-} variable_sig;
+	type_signature type;
+} var_definition;
 
-b32 is_primitive(VARIABLE_TYPE type) {
-	return type != VT_STRUCT && type != VT_ENUM;
+b32 is_primitive(SYMBOL_TYPE type) {
+	return type != SM_STRUCT && type != SM_ENUM;
 }
 
 b32 is_token_primitive_type(TOKEN_TYPE type) {
@@ -359,24 +368,28 @@ b32 can_token_be_unary_op(TOKEN_TYPE type) {
 	return type == TK_PLUS || type == TK_MINUS || type == TK_RETURN;
 }
 
-VARIABLE_TYPE token_type_2_variable_type(TOKEN_TYPE type) {
+SYMBOL_TYPE token_type_2_symbol_type(TOKEN_TYPE type) {
 	switch (type) {
 		case TK_S32:
-			return VT_S32;
+			return SM_S32;
 		case TK_U32:
-			return VT_U32;
+			return SM_U32;
 	}
 
 	assert(0 && "unexpected token type!");
-	return VT_UNKNOWN;
+	return SM_UNKNOWN;
 }
+
+typedef struct fn_signature {
+	type_signature return_type;
+	var_definition** parameters;
+} fn_signature;
 
 typedef struct {
 	string name;
-	type_sig return_type;
-	variable_sig* parameters;
+	fn_signature signature;
 	struct statement** statements;
-} function_sig;
+} fn_definition;
 
 typedef struct {
 	struct statement* fn_statement;
@@ -406,9 +419,9 @@ typedef struct statement {
 		u32 value_u32;
 		string value_str;
 
-		variable_sig value_var_decl;
+		var_definition value_var_decl;
 
-		function_sig value_fn_decl;
+		fn_definition value_fn_decl;
 		function_call value_fn_call;
 
 		binary_op value_binary_op;
@@ -523,11 +536,11 @@ statement* parse_string(parse_ctx* ctx) {
 	return st;
 }
 
-type_sig parse_type_sig(parse_ctx* ctx) {
-	type_sig result = {0};
+type_signature parse_type_sig(parse_ctx* ctx) {
+	type_signature result = {0};
 	token tk = next_token(ctx);
 	if (is_token_primitive_type(tk.type)) {
-		result.type = token_type_2_variable_type(tk.type);
+		result.type = token_type_2_symbol_type(tk.type);
 	} else {
 		assert(0 && "unexpected variable type!");
 	}
@@ -537,8 +550,8 @@ type_sig parse_type_sig(parse_ctx* ctx) {
 
 statement* parse_variable_sig(parse_ctx* ctx) {
 	token tk = require_token(ctx, TK_IDENTIFIER);
-	statement* st = malloc_statement(ST_VAR_DECL);
-	variable_sig* decl = &st->value_var_decl;
+	statement* st = malloc_statement(ST_VAR_DEFINITION);
+	var_definition* decl = &st->value_var_decl;
 	decl->name = tk.str;
 	require_token(ctx, TK_COLON);
 	decl->type = parse_type_sig(ctx);
@@ -668,8 +681,8 @@ statement* parse_fn_statement(parse_ctx* ctx) {
 
 statement* parse_fn_declaration(parse_ctx* ctx) {
 	token id = require_token(ctx, TK_IDENTIFIER);
-	statement* st = malloc_statement(ST_FN_DECL);
-	function_sig* fn = &st->value_fn_decl;
+	statement* st = malloc_statement(ST_FN_DEFINITION);
+	fn_definition* fn = &st->value_fn_decl;
 	fn->name = id.str;
 
 	require_token(ctx, TK_COLON);
@@ -682,7 +695,7 @@ statement* parse_fn_declaration(parse_ctx* ctx) {
 	token tk = peek_token(ctx, 0);
 	if (tk.type == TK_ARROW) {
 		require_token(ctx, TK_ARROW);
-		fn->return_type = parse_type_sig(ctx);
+		fn->signature.return_type = parse_type_sig(ctx);
 	}
 
 	require_token(ctx, TK_LBRACE);
@@ -720,6 +733,8 @@ statement* parse(parse_ctx* ctx) {
 	return 0;
 }
 
+/*********************************AST PRINTING*********************************/
+
 void print_ast(statement* root) {
 	if (root->type == ST_LITERAL_S32) {
 		printf("%d", root->value_s32);
@@ -729,32 +744,32 @@ void print_ast(statement* root) {
 		printf("\"%.*s\"", root->value_str.len, root->value_str.at);
 	} else if (root->type == ST_IDENTIFIER) {
 		printf("%.*s", root->value_identifier.name.len, root->value_identifier.name.at);
-	} else if (root->type == ST_VAR_DECL) {
-		variable_sig* var = &root->value_var_decl;
+	} else if (root->type == ST_VAR_DEFINITION) {
+		var_definition* var = &root->value_var_decl;
 		printf("%.*s : ", var->name.len, var->name.at);
 		switch (var->type.type) {
-			case VT_S32: {
+			case SM_S32: {
 				printf("s32");
 			} break;
-			case VT_U32: {
+			case SM_U32: {
 				printf("u32");
 			} break;
-			case VT_STRUCT:
-			case VT_ENUM: {
+			case SM_STRUCT:
+			case SM_ENUM: {
 				printf("%.*s", var->type.custom_type_name.len, var->type.custom_type_name.at);
 			} break;
 			default: {
 				printf("{unknown var type}");
 			} break;
 		}
-	} else if (root->type == ST_FN_DECL) {
-		function_sig* f = &root->value_fn_decl;
+	} else if (root->type == ST_FN_DEFINITION) {
+		fn_definition* f = &root->value_fn_decl;
 		// TODO: parameters printing
 		printf("%.*s : fn() ", f->name.len, f->name.at);
-		if (f->return_type.type != VT_VOID) {
-			printf("-> %s ", VARIABLE_TYPE_STR(f->return_type.type));
-			if (!is_primitive(f->return_type.type)) {
-				printf("%.*s ", f->return_type.custom_type_name.len, f->return_type.custom_type_name.at);
+		if (f->signature.return_type.type != SM_VOID) {
+			printf("-> %s ", SYMBOL_TYPE_STR(f->signature.return_type.type));
+			if (!is_primitive(f->signature.return_type.type)) {
+				printf("%.*s ", f->signature.return_type.custom_type_name.len, f->signature.return_type.custom_type_name.at);
 			}
 		}
 		printf("{");
@@ -820,6 +835,100 @@ void print_ast(statement* root) {
 	}
 }
 
+/*********************************SYMBOL TABLE*********************************/
+
+typedef struct {
+	string name;
+	type_signature type;
+	int iline, icol;
+} symbol;
+
+typedef struct scope {
+	string name;
+	symbol** symbols;
+	struct scope** children;
+} scope;
+
+symbol* malloc_symbol(SYMBOL_TYPE type) {
+	symbol* result = malloc(sizeof(symbol));
+	*result = (symbol){0};
+	result->type.type = type;
+	if (type == SM_FN) {
+		result->type.fn_signature = malloc(sizeof(fn_signature));
+		*result->type.fn_signature = (fn_signature){0};
+	}
+	return result;
+}
+
+scope* malloc_scope() {
+	scope* result = malloc(sizeof(scope));
+	*result = (scope){0};
+	return result;
+}
+
+void build_symbol_table_recursive(statement* node, scope* current_scope) {
+	if (node->type == ST_FN_DEFINITION) {
+		symbol* sym = malloc_symbol(SM_FN);
+		fn_definition* fn = &node->value_fn_decl;
+		sym->name = fn->name;
+		*sym->type.fn_signature = fn->signature;
+		stb_arr_push(current_scope->symbols, sym);
+
+		scope* child_scope = malloc_scope();
+		child_scope->name = sym->name;
+		for (u32 i = 0; i < stb_arr_len(fn->statements); ++i) {
+			build_symbol_table_recursive(fn->statements[i], child_scope);
+		}
+		stb_arr_push(current_scope->children, child_scope);
+	} else if (node->type == ST_VAR_DEFINITION) {
+		var_definition* var = &node->value_var_decl;
+		symbol* sym = malloc_symbol(var->type.type);
+		sym->name = var->name;
+		stb_arr_push(current_scope->symbols, sym);
+	} else if (node->type == ST_BINARY_OP) {
+		build_symbol_table_recursive(node->value_binary_op.left_hand, current_scope);
+	}
+}
+
+scope* build_symbol_table(statement** ast_root_nodes) {
+	scope* result = malloc_scope();
+	result->name = cstring_2_string("global");
+	for (u32 i = 0; i < stb_arr_len(ast_root_nodes); ++i) {
+		build_symbol_table_recursive(ast_root_nodes[i], result);
+	}
+	return result;
+}
+
+void print_indent(s32 indent, b32 insert_new_line) {
+	if (insert_new_line) {
+		printf("\n");
+	}
+	for (u32 i = 0; i < indent; ++i) {
+		printf("\t");
+	}
+}
+
+print_symbol_table(scope* s, u32 indent) {
+	print_indent(indent, false);
+	printf("%.*s {", s->name.len, s->name.at);
+	for (u32 i = 0; i < stb_arr_len(s->symbols); ++i) {
+		print_indent(indent + 1, true);
+		symbol* sym = s->symbols[i];
+		printf("%.*s : %s", sym->name.len, sym->name.at, SYMBOL_TYPE_STR(sym->type.type));
+	}
+
+	for (u32 i = 0; i < stb_arr_len(s->children); ++i) {
+		print_indent(indent, true);
+		scope* child_scope = s->children[i];
+		print_symbol_table(child_scope, indent + 1);
+	}
+
+	print_indent(indent, true);
+	printf("}");
+}
+
+/*********************************MAIN*********************************/
+
 char* load_text_file(const char* path) {
 	FILE* file = fopen(path, "rb");
 	if (!file)
@@ -865,10 +974,15 @@ int main(int argc, char** argv) {
 	}
 #endif
 
-#if 1
+#if 0
 	for (u32 i = 0; i < stb_arr_len(statements); ++i) {
 		print_ast(statements[i]);
 	}
+#endif
+
+#if 1
+	scope* global_scope = build_symbol_table(statements);
+	print_symbol_table(global_scope, 0);
 #endif
 
 	return 0;
