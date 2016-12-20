@@ -386,9 +386,15 @@ typedef struct fn_signature {
 } fn_signature;
 
 typedef struct {
+	struct statement** statements;
+	struct sym_table* symbols;
+} scope;
+
+typedef struct {
 	string name;
 	fn_signature signature;
-	struct statement** statements;
+	scope* scope;
+	struct symbol* symbol;
 } fn_definition;
 
 typedef struct {
@@ -398,6 +404,7 @@ typedef struct {
 
 typedef struct {
 	string name;
+	struct symbol* symbol;
 } identifier;
 
 typedef struct {
@@ -430,6 +437,12 @@ typedef struct statement {
 		identifier value_identifier;
 	};
 } statement;
+
+scope* malloc_scope() {
+	scope* result = malloc(sizeof(scope));
+	*result = (scope){0};
+	return result;
+}
 
 statement* malloc_statement(STATEMENT_TYPE type) {
 	statement* result = malloc(sizeof(statement));
@@ -698,11 +711,13 @@ statement* parse_fn_declaration(parse_ctx* ctx) {
 		fn->signature.return_type = parse_type_sig(ctx);
 	}
 
+	// TODO: parse declarations of foreign functions
 	require_token(ctx, TK_LBRACE);
+	fn->scope = malloc_scope();
     tk = peek_token(ctx, 0);
     while (tk.type != TK_RBRACE) {
         statement* fn_st = parse_fn_statement(ctx);
-        stb_arr_push(fn->statements, fn_st);
+        stb_arr_push(fn->scope->statements, fn_st);
         tk = peek_token(ctx, 0);
     }
 	require_token(ctx, TK_RBRACE);
@@ -772,12 +787,16 @@ void print_ast(statement* root) {
 				printf("%.*s ", f->signature.return_type.custom_type_name.len, f->signature.return_type.custom_type_name.at);
 			}
 		}
-		printf("{");
-		for (u32 i = 0; i < stb_arr_len(f->statements); ++i) {
-			printf("\n\t");
-			print_ast(f->statements[i]);
+		if (f->scope) {
+			printf("{");
+			for (u32 i = 0; i < stb_arr_len(f->scope->statements); ++i) {
+				printf("\n\t");
+				print_ast(f->scope->statements[i]);
+			}
+			printf("\n}\n");
+		} else {
+			printf(";\n");
 		}
-		printf("\n}\n");
 	} else if (root->type == ST_FN_CALL) {
 		function_call* f = &root->value_fn_call;
 		print_ast(f->fn_statement);
@@ -837,17 +856,17 @@ void print_ast(statement* root) {
 
 /*********************************SYMBOL TABLE*********************************/
 
-typedef struct {
+typedef struct symbol {
 	string name;
 	type_signature type;
 	int iline, icol;
 } symbol;
 
-typedef struct scope {
+typedef struct sym_table {
 	string name;
 	symbol** symbols;
-	struct scope** children;
-} scope;
+	struct sym_table** children;
+} sym_table;
 
 symbol* malloc_symbol(SYMBOL_TYPE type) {
 	symbol* result = malloc(sizeof(symbol));
@@ -860,38 +879,42 @@ symbol* malloc_symbol(SYMBOL_TYPE type) {
 	return result;
 }
 
-scope* malloc_scope() {
-	scope* result = malloc(sizeof(scope));
-	*result = (scope){0};
+sym_table* malloc_sym_table() {
+	sym_table* result = malloc(sizeof(sym_table));
+	*result = (sym_table){0};
 	return result;
 }
 
-void build_symbol_table_recursive(statement* node, scope* current_scope) {
+void build_symbol_table_recursive(statement* node, sym_table* current_table) {
 	if (node->type == ST_FN_DEFINITION) {
 		symbol* sym = malloc_symbol(SM_FN);
 		fn_definition* fn = &node->value_fn_decl;
+		fn->symbol = sym;
 		sym->name = fn->name;
 		*sym->type.fn_signature = fn->signature;
-		stb_arr_push(current_scope->symbols, sym);
+		stb_arr_push(current_table->symbols, sym);
 
-		scope* child_scope = malloc_scope();
-		child_scope->name = sym->name;
-		for (u32 i = 0; i < stb_arr_len(fn->statements); ++i) {
-			build_symbol_table_recursive(fn->statements[i], child_scope);
+		if (fn->scope) {
+			sym_table* child_table = malloc_sym_table();
+			fn->scope->symbols = child_table;
+			child_table->name = sym->name;
+			for (u32 i = 0; i < stb_arr_len(fn->scope->statements); ++i) {
+				build_symbol_table_recursive(fn->scope->statements[i], child_table);
+			}
+			stb_arr_push(current_table->children, child_table);
 		}
-		stb_arr_push(current_scope->children, child_scope);
 	} else if (node->type == ST_VAR_DEFINITION) {
 		var_definition* var = &node->value_var_decl;
 		symbol* sym = malloc_symbol(var->type.type);
 		sym->name = var->name;
-		stb_arr_push(current_scope->symbols, sym);
+		stb_arr_push(current_table->symbols, sym);
 	} else if (node->type == ST_BINARY_OP) {
-		build_symbol_table_recursive(node->value_binary_op.left_hand, current_scope);
+		build_symbol_table_recursive(node->value_binary_op.left_hand, current_table);
 	}
 }
 
-scope* build_symbol_table(statement** ast_root_nodes) {
-	scope* result = malloc_scope();
+sym_table* build_symbol_table(statement** ast_root_nodes) {
+	sym_table* result = malloc_sym_table();
 	result->name = cstring_2_string("global");
 	for (u32 i = 0; i < stb_arr_len(ast_root_nodes); ++i) {
 		build_symbol_table_recursive(ast_root_nodes[i], result);
@@ -920,7 +943,7 @@ void print_type(type_signature* type) {
 	}
 }
 
-print_symbol_table(scope* s, u32 indent) {
+print_symbol_table(sym_table* s, u32 indent) {
 	print_indent(indent, false);
 	printf("%.*s {", s->name.len, s->name.at);
 	for (u32 i = 0; i < stb_arr_len(s->symbols); ++i) {
@@ -932,13 +955,17 @@ print_symbol_table(scope* s, u32 indent) {
 
 	for (u32 i = 0; i < stb_arr_len(s->children); ++i) {
 		print_indent(indent, true);
-		scope* child_scope = s->children[i];
-		print_symbol_table(child_scope, indent + 1);
+		sym_table* child_table = s->children[i];
+		print_symbol_table(child_table, indent + 1);
 	}
 
 	print_indent(indent, true);
 	printf("}");
 }
+
+/*****************************SYNTAX CHECK*****************************/
+
+// TODO: syntax checking
 
 /*********************************MAIN*********************************/
 
@@ -994,8 +1021,8 @@ int main(int argc, char** argv) {
 #endif
 
 #if 1
-	scope* global_scope = build_symbol_table(statements);
-	print_symbol_table(global_scope, 0);
+	sym_table* global_sym_table = build_symbol_table(statements);
+	print_symbol_table(global_sym_table, 0);
 #endif
 
 	return 0;
