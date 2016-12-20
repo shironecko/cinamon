@@ -387,7 +387,7 @@ typedef struct fn_signature {
 
 typedef struct {
 	struct statement** statements;
-	struct sym_table* symbols;
+	struct sym_table* sym_table;
 } scope;
 
 typedef struct {
@@ -859,7 +859,9 @@ void print_ast(statement* root) {
 typedef struct symbol {
 	string name;
 	type_signature type;
-	int iline, icol;
+	u32 iline, icol;
+	// this is used identify usages of symbols that are in the current scope but was not yet defined
+	b32 is_defined;
 } symbol;
 
 typedef struct sym_table {
@@ -885,9 +887,11 @@ sym_table* malloc_sym_table() {
 	return result;
 }
 
-void build_symbol_table_recursive(statement* node, sym_table* current_table) {
+void build_symbol_table_recursive(statement* node, sym_table* current_table, b32 is_current_table_global) {
 	if (node->type == ST_FN_DEFINITION) {
 		symbol* sym = malloc_symbol(SM_FN);
+		// functions can always be used before they are defined
+		sym->is_defined = true;
 		fn_definition* fn = &node->value_fn_decl;
 		fn->symbol = sym;
 		sym->name = fn->name;
@@ -896,20 +900,22 @@ void build_symbol_table_recursive(statement* node, sym_table* current_table) {
 
 		if (fn->scope) {
 			sym_table* child_table = malloc_sym_table();
-			fn->scope->symbols = child_table;
+			fn->scope->sym_table = child_table;
 			child_table->name = sym->name;
 			for (u32 i = 0; i < stb_arr_len(fn->scope->statements); ++i) {
-				build_symbol_table_recursive(fn->scope->statements[i], child_table);
+				build_symbol_table_recursive(fn->scope->statements[i], child_table, false);
 			}
 			stb_arr_push(current_table->children, child_table);
 		}
 	} else if (node->type == ST_VAR_DEFINITION) {
 		var_definition* var = &node->value_var_decl;
 		symbol* sym = malloc_symbol(var->type.type);
+		// only global variables can be used before they are defined
+		sym->is_defined = is_current_table_global;
 		sym->name = var->name;
 		stb_arr_push(current_table->symbols, sym);
 	} else if (node->type == ST_BINARY_OP) {
-		build_symbol_table_recursive(node->value_binary_op.left_hand, current_table);
+		build_symbol_table_recursive(node->value_binary_op.left_hand, current_table, is_current_table_global);
 	}
 }
 
@@ -917,7 +923,7 @@ sym_table* build_symbol_table(statement** ast_root_nodes) {
 	sym_table* result = malloc_sym_table();
 	result->name = cstring_2_string("global");
 	for (u32 i = 0; i < stb_arr_len(ast_root_nodes); ++i) {
-		build_symbol_table_recursive(ast_root_nodes[i], result);
+		build_symbol_table_recursive(ast_root_nodes[i], result, true);
 	}
 	return result;
 }
@@ -967,6 +973,57 @@ print_symbol_table(sym_table* s, u32 indent) {
 
 // TODO: syntax checking
 
+/******************************LLVM IR GEN*****************************/
+
+llvm_ir_type(type_signature* t) {
+	if (t->type == SM_S32 || t->type == SM_U32) {
+		printf("i32");
+	} else if (t->type == SM_VOID) {
+		printf("void");
+	}
+}
+
+llvm_ir_symbol_decl(symbol* s) {
+	if (s->type.type == SM_FN) {
+		printf("declare ");
+		llvm_ir_type(&s->type.fn_signature->return_type);
+		printf(" @%.*s(", s->name.len, s->name.at);
+		// TODO: generate ir for arguments
+		printf(")\n");
+	}
+}
+
+void generate_llvm_ir(scope* global_scope_ast)
+{
+	printf(
+			"; ModuleID = 'test.cn'\n"
+			"source_filename = \"test.cn\"\n"
+			"declare i32 @printf(i8*, ...)\n\n");
+
+	// declarations
+	/* for (u32 i = 0; i < stb_arr_len(global_scope_ast->sym_table->symbols); ++i) { */
+	/* 	symbol* s = global_scope_ast->sym_table->symbols[i]; */
+	/* 	llvm_ir_symbol_decl(s); */
+	/* } */
+
+	for (u32 i = 0; i < stb_arr_len(global_scope_ast->statements); ++i) {
+		statement* s = global_scope_ast->statements[i];
+		if (s->type == ST_FN_DEFINITION) {
+			fn_definition* fn = &s->value_fn_decl;
+			printf("define ");
+			llvm_ir_type(&fn->signature.return_type);
+			printf(" @%.*s(", fn->name.len, fn->name.at);
+			// TODO: generate ir for arguments
+			printf(")");
+			if (fn->signature.return_type.type == SM_VOID) {
+				printf(" {\n  ret void\n}\n");
+			} else {
+				printf(" {\n  ret i32 0\n}\n");
+			}
+		}
+	}
+}
+
 /*********************************MAIN*********************************/
 
 char* load_text_file(const char* path) {
@@ -1005,11 +1062,11 @@ int main(int argc, char** argv) {
 #endif
 
 #if 1
-	statement** statements = 0;
+	scope* global_scope = malloc_scope();
 	parse_ctx pctx = { .tokens = tokens, .at = tokens };
 	statement* st = parse(&pctx);
 	while (st) {
-		stb_arr_push(statements, st);
+		stb_arr_push(global_scope->statements, st);
 		st = parse(&pctx);
 	}
 #endif
@@ -1021,8 +1078,16 @@ int main(int argc, char** argv) {
 #endif
 
 #if 1
-	sym_table* global_sym_table = build_symbol_table(statements);
+	sym_table* global_sym_table = build_symbol_table(global_scope->statements);
+	global_scope->sym_table = global_sym_table;
+#endif
+
+#if 0
 	print_symbol_table(global_sym_table, 0);
+#endif
+
+#if 1
+	generate_llvm_ir(global_scope);
 #endif
 
 	return 0;
