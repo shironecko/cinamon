@@ -775,6 +775,9 @@ void print_ast(statement* root) {
 		}
 	} else if (root->type == ST_IDENTIFIER) {
 		printf("%.*s", root->value_identifier.name.len, root->value_identifier.name.at);
+		if (!root->value_identifier.symbol) {
+			printf("{no symbol ptr!}");
+		}
 	} else if (root->type == ST_VAR_DEFINITION) {
 		var_definition* var = &root->value_var_decl;
 		printf("%.*s : ", var->name.len, var->name.at);
@@ -1012,6 +1015,63 @@ print_symbol_table(sym_table* s, u32 indent) {
 	printf("}");
 }
 
+b32 are_strings_equal(string a, string b) {
+	u32 min_len = a.len < b.len ? a.len : b.len;
+	return !strncmp(a.at, b.at, min_len);
+}
+
+// TODO: rewrite this bit after making scopes into just a type of statement
+void patch_symbol_pointers_recursive(statement* st, sym_table** sym_table_stack) {
+	if (st->type == ST_BINARY_OP) {
+		patch_symbol_pointers_recursive(st->value_binary_op.left_hand, sym_table_stack);
+		patch_symbol_pointers_recursive(st->value_binary_op.right_hand, sym_table_stack);
+	} else if (st->type == ST_UNARY_OP) {
+		patch_symbol_pointers_recursive(st->value_unary_op.operand, sym_table_stack);
+	} else if (st->type == ST_FN_CALL) {
+		fn_call* fc = &st->value_fn_call;
+		patch_symbol_pointers_recursive(fc->fn_statement, sym_table_stack);
+		for (u32 i = 0; i < stb_arr_len(fc->parameters); ++i) {
+			patch_symbol_pointers_recursive(fc->parameters[i], sym_table_stack);
+		}
+	} else if (st->type == ST_IDENTIFIER) {
+		identifier* id = &st->value_identifier;
+		for (s32 i = stb_arr_len(sym_table_stack) - 1; i >= 0 && !id->symbol; --i) {
+			sym_table* table = sym_table_stack[i];
+			for (u32 j = 0; j < stb_arr_len(table->symbols); ++j) {
+				symbol* s = table->symbols[j];
+				if (s->is_literal) {
+					continue;
+				}
+
+				if (are_strings_equal(s->name, id->name)) {
+					id->symbol = s;
+					break;
+				}
+			}
+		}
+	}
+}
+
+void patch_symbol_pointers(scope* global_scope) {
+	sym_table** sym_table_stack = 0;
+	stb_arr_push(sym_table_stack, global_scope->sym_table);
+	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
+		statement* s = global_scope->statements[i];
+		if (s->type == ST_FN_DEFINITION) {
+			fn_definition* fn = &s->value_fn_decl;
+			if (!fn->scope) {
+				continue;
+			}
+
+			stb_arr_push(sym_table_stack, fn->scope->sym_table);
+			for (u32 j = 0; j < stb_arr_len(fn->scope->statements); ++j) {
+				patch_symbol_pointers_recursive(fn->scope->statements[j], sym_table_stack);
+			}
+			stb_arr_pop(sym_table_stack);
+		}
+	}
+}
+
 /*****************************SYNTAX CHECK*****************************/
 
 // TODO: syntax checking
@@ -1112,19 +1172,20 @@ int main(int argc, char** argv) {
 	}
 #endif
 
-#if 0
-	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
-		print_ast(global_scope->statements[i]);
-	}
-#endif
-
 #if 1
 	sym_table* global_sym_table = build_symbol_table(global_scope->statements);
 	global_scope->sym_table = global_sym_table;
+	patch_symbol_pointers(global_scope);
+#endif
+
+#if 0
+	print_symbol_table(global_sym_table, 0);
 #endif
 
 #if 1
-	print_symbol_table(global_sym_table, 0);
+	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
+		print_ast(global_scope->statements[i]);
+	}
 #endif
 
 #if 0
