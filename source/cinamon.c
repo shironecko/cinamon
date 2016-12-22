@@ -429,6 +429,7 @@ typedef struct {
 
 typedef struct statement {
 	STATEMENT_TYPE type;
+	type_signature resulting_type;
 
 	union {
 		literal value_literal;
@@ -455,6 +456,7 @@ statement* malloc_statement(STATEMENT_TYPE type) {
 	statement* result = malloc(sizeof(statement));
 	*result = (statement){0};
 	result->type = type;
+	result->resulting_type.type = SM_VOID;
 	return result;
 }
 
@@ -761,7 +763,7 @@ statement* parse(parse_ctx* ctx) {
 
 /*********************************AST PRINTING*********************************/
 
-void print_ast(statement* root) {
+void print_ast(statement* root, b32 print_statement_resulting_types) {
 	if (root->type == ST_LITERAL) {
 		literal* l = &root->value_literal;
 		if (l->type == SM_S32) {
@@ -810,7 +812,7 @@ void print_ast(statement* root) {
 			printf("{");
 			for (u32 i = 0; i < stb_arr_len(f->scope->statements); ++i) {
 				printf("\n\t");
-				print_ast(f->scope->statements[i]);
+				print_ast(f->scope->statements[i], print_statement_resulting_types);
 			}
 			printf("\n}\n");
 		} else {
@@ -818,10 +820,10 @@ void print_ast(statement* root) {
 		}
 	} else if (root->type == ST_FN_CALL) {
 		fn_call* f = &root->value_fn_call;
-		print_ast(f->fn_statement);
+		print_ast(f->fn_statement, print_statement_resulting_types);
 		printf("(");
 		for (u32 i = 0, n = stb_arr_len(f->parameters); i < n; ++i) {
-			print_ast(f->parameters[i]);
+			print_ast(f->parameters[i], print_statement_resulting_types);
 			if (i != n - 1) {
 				printf(", ");
 			}
@@ -832,7 +834,7 @@ void print_ast(statement* root) {
 		if (bop->left_hand->type == ST_BINARY_OP) {
 			printf("(");
 		}
-		print_ast(bop->left_hand);
+		print_ast(bop->left_hand, print_statement_resulting_types);
 		if (bop->left_hand->type == ST_BINARY_OP) {
 			printf(")");
 		}
@@ -852,7 +854,7 @@ void print_ast(statement* root) {
 		if (bop->right_hand->type == ST_BINARY_OP) {
 			printf("(");
 		}
-		print_ast(bop->right_hand);
+		print_ast(bop->right_hand, print_statement_resulting_types);
 		if (bop->right_hand->type == ST_BINARY_OP) {
 			printf(")");
 		}
@@ -866,10 +868,14 @@ void print_ast(statement* root) {
 			printf("return");
 		}
 		printf("(");
-		print_ast(uop->operand);
+		print_ast(uop->operand, print_statement_resulting_types);
 		printf(")");
 	} else {
-		printf("{ %s }", STATEMENT_TYPE_STR(root->type));
+		printf("{%s}", STATEMENT_TYPE_STR(root->type));
+	}
+
+	if (print_statement_resulting_types) {
+		printf("[%s]", SYMBOL_TYPE_STR(root->resulting_type.type));
 	}
 }
 
@@ -1072,9 +1078,65 @@ void patch_symbol_pointers(scope* global_scope) {
 	}
 }
 
-/*****************************SYNTAX CHECK*****************************/
+/************************RESOLVE STATEMENT TYPES************************/
 
-// TODO: syntax checking
+SYMBOL_TYPE resolve_statement_types_recursive(statement* st) {
+	if (st->type == ST_LITERAL) {
+		literal* l = &st->value_literal;
+		st->resulting_type.type = l->type;
+		return l->type;
+	} else if (st->type == ST_IDENTIFIER && st->value_identifier.symbol) {
+		symbol* s = st->value_identifier.symbol;
+		if (s->type.type == SM_FN) {
+			st->resulting_type = s->type.fn_signature->return_type;
+		} else {
+			st->resulting_type = s->type;
+		}
+		return st->resulting_type.type;
+	} else if (st->type == ST_FN_DEFINITION && st->value_fn_decl.symbol) { // NOTE: this does not work cause of the shitty way I handle scopes now
+		st->resulting_type = st->value_fn_decl.symbol->type;
+		return st->resulting_type.type;
+	} else if (st->type == ST_FN_CALL) {
+		fn_call* fc = &st->value_fn_call;
+		for (u32 i = 0; i < stb_arr_len(fc->parameters); ++i) {
+			resolve_statement_types_recursive(fc->parameters[i]);
+		}
+		SYMBOL_TYPE type = resolve_statement_types_recursive(fc->fn_statement);
+		st->resulting_type.type = type;
+		return type;
+	} else if (st->type == ST_VAR_DEFINITION) {
+		return st->value_var_decl.type.type;
+	} else if (st->type == ST_BINARY_OP) {
+		// TODO: actual logic, not this dumb shit
+		SYMBOL_TYPE left_type = resolve_statement_types_recursive(st->value_binary_op.left_hand);
+		SYMBOL_TYPE right_type = resolve_statement_types_recursive(st->value_binary_op.right_hand);
+		assert(left_type == right_type);
+		st->resulting_type.type = left_type;
+		return left_type;
+	} else if (st->type == ST_UNARY_OP) {
+		// TODO: same as binary op
+		SYMBOL_TYPE type = resolve_statement_types_recursive(st->value_unary_op.operand);
+		st->resulting_type.type = type;
+		return type;
+	}
+
+	return SM_VOID;
+}
+
+void resolve_statement_types(scope* global_scope) {
+	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
+		if (global_scope->statements[i]->type == ST_FN_DEFINITION) {
+			scope* fn_scope = global_scope->statements[i]->value_fn_decl.scope;
+			if (!fn_scope) {
+				continue;
+			}
+
+			for (u32 j = 0; j < stb_arr_len(fn_scope->statements); ++j) {
+				resolve_statement_types_recursive(fn_scope->statements[j]);
+			}
+		}
+	}
+}
 
 /******************************LLVM IR GEN*****************************/
 
@@ -1176,6 +1238,7 @@ int main(int argc, char** argv) {
 	sym_table* global_sym_table = build_symbol_table(global_scope->statements);
 	global_scope->sym_table = global_sym_table;
 	patch_symbol_pointers(global_scope);
+	resolve_statement_types(global_scope);
 #endif
 
 #if 0
@@ -1184,7 +1247,7 @@ int main(int argc, char** argv) {
 
 #if 1
 	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
-		print_ast(global_scope->statements[i]);
+		print_ast(global_scope->statements[i], true);
 	}
 #endif
 
