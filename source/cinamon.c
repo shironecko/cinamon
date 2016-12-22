@@ -1140,25 +1140,88 @@ void resolve_statement_types(scope* global_scope) {
 
 /******************************LLVM IR GEN*****************************/
 
-llvm_ir_type(type_signature* t) {
+char* llvm_ir_type(type_signature* t) {
 	if (t->type == SM_S32 || t->type == SM_U32) {
-		printf("i32");
+		return"i32";
 	} else if (t->type == SM_VOID) {
-		printf("void");
+		return"void";
 	}
+
+	assert(0 && "unexpected type!");
+	return "fuck";
+}
+
+char* llvm_ir_binary_op(BINARY_OP_TYPE type) {
+	switch (type) {
+		case BO_ADD:
+			return "add";
+		case BO_SUB:
+			return "sub";
+	}
+
+	assert(0 && "unexpected operator type!");
+	return "fuck";
+}
+
+char* llvm_ir_unary_op(UNARY_OP_TYPE type) {
+	switch(type) {
+		case UO_NEGATIVE:
+			return "-";
+	}
+
+	assert(0 && "unexpected operator type!");
+	return "fuck";
 }
 
 llvm_ir_symbol_decl(symbol* s) {
 	if (s->type.type == SM_FN) {
-		printf("declare ");
-		llvm_ir_type(&s->type.fn_signature->return_type);
+		printf("declare %s", llvm_ir_type(&s->type.fn_signature->return_type));
 		printf(" @%.*s(", s->name.len, s->name.at);
 		// TODO: generate ir for arguments
 		printf(")\n");
 	}
 }
 
-void llvm_ir_statement(statement* st, sym_table* sym_table, u32 indent) {
+typedef struct {
+	u32 registers_used;
+} ssa_gen_ctx;
+
+u32 llvm_ir_statement(statement* st, ssa_gen_ctx* ctx, u32 indent) {
+	if (st->type == ST_LITERAL) {
+		literal* l = &st->value_literal;
+		if (l->type == SM_S32 || l->type == SM_U32) {
+			u32 reg = ctx->registers_used++;
+			print_indent(indent, true);
+			printf("%%%u = i32 %u", reg, l->s32);
+			return reg;
+		}
+	} else if (st->type == ST_BINARY_OP) {
+		binary_op* bop = &st->value_binary_op;
+		if (bop->type == BO_ASSIGNMENT) {
+			/* statement* left_hand = bop->left_hand; */
+			/* if (left_hand->type == ST_VAR_DEFINITION) { */
+			/* } */
+		} else {
+			u32 left_reg = llvm_ir_statement(bop->left_hand, ctx, indent);
+			u32 right_reg = llvm_ir_statement(bop->right_hand, ctx, indent);
+			u32 reg = ctx->registers_used++;
+			print_indent(indent, true);
+			printf("%%%u = %s %s %%%u, %s %%%u", reg, llvm_ir_binary_op(bop->type),
+					llvm_ir_type(&bop->left_hand->resulting_type), left_reg,
+					llvm_ir_type(&bop->right_hand->resulting_type), right_reg);
+			return reg;
+		}
+	} else if (st->type == ST_UNARY_OP) {
+		unary_op* uop = &st->value_unary_op;
+		if (uop->type == UO_RETURN) {
+			u32 reg = llvm_ir_statement(uop->operand, ctx, indent);
+			print_indent(indent, true);
+			printf("ret %s %%%u", llvm_ir_type(&uop->operand->resulting_type), reg);
+		} else {
+		}
+	}
+
+	return 0xFFFFFFFF;
 }
 
 void generate_llvm_ir(scope* global_scope_ast)
@@ -1172,15 +1235,18 @@ void generate_llvm_ir(scope* global_scope_ast)
 		statement* s = global_scope_ast->statements[i];
 		if (s->type == ST_FN_DEFINITION) {
 			fn_definition* fn = &s->value_fn_decl;
-			printf("define ");
-			llvm_ir_type(&fn->signature.return_type);
+			printf("define %s", llvm_ir_type(&fn->signature.return_type));
 			printf(" @%.*s(", fn->name.len, fn->name.at);
 			// TODO: generate ir for arguments
 			printf(")");
 			printf(" {");
+			ssa_gen_ctx ssa_ctx = {0};
 			for (u32 j = 0; j < stb_arr_len(fn->scope->statements); ++j) {
 				statement* st = fn->scope->statements[j];
-				llvm_ir_statement(st, fn->scope->sym_table, 1);
+				llvm_ir_statement(st, &ssa_ctx, 1);
+			}
+			if (fn->signature.return_type.type == SM_VOID) {
+				printf("\n\tret void");
 			}
 			printf("\n}\n");
 		}
@@ -1245,13 +1311,13 @@ int main(int argc, char** argv) {
 	print_symbol_table(global_sym_table, 0);
 #endif
 
-#if 1
+#if 0
 	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
-		print_ast(global_scope->statements[i], true);
+		print_ast(global_scope->statements[i], false);
 	}
 #endif
 
-#if 0
+#if 1
 	generate_llvm_ir(global_scope);
 #endif
 

@@ -1,17 +1,18 @@
 main : fn() -> s32 {
-	x : s32 = -5 + 3 * 2;
-	printf("Hello, world! The answer to everything is %u\n", x);
-	x = get_answer();
-	printf("Sorry, my bad, it's actually %d", x);
+	/* x : s32 = -5 + 3 * 2; */
+	/* printf("Hello, world! The answer to everything is %u\n", x); */
+	/* x = get_answer(); */
+	/* printf("Sorry, my bad, it's actually %d", x); */
 
-	return 0;
+	/* return 0; */
+	return (5 + (3 - 2));
 }
 
-get_answer: fn() -> s32 {
-	result : s32 = 0;
-	result = 42;
-	return result;
-}
+/* get_answer: fn() -> s32 { */
+/* 	result : s32 = 0; */
+/* 	result = 42; */
+/* 	return result; */
+/* } */
 
-do_nothing: fn() {
-}
+/* do_nothing: fn() { */
+/* } */
