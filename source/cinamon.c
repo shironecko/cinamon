@@ -1138,6 +1138,87 @@ void resolve_statement_types(scope* global_scope) {
 	}
 }
 
+statement* solve_constant_expressions_recursive(statement* st) {
+	if (st->type == ST_BINARY_OP) {
+		binary_op* bop = &st->value_binary_op;
+		statement* new_lh = solve_constant_expressions_recursive(bop->left_hand);
+		if (new_lh) {
+			free(bop->left_hand);
+			bop->left_hand = new_lh;
+		}
+		statement* new_rh = solve_constant_expressions_recursive(bop->right_hand);
+		if (new_rh) {
+			free(bop->right_hand);
+			bop->right_hand = new_rh;
+		}
+
+		if (bop->type == BO_ASSIGNMENT) {
+			return 0;
+		}
+
+		if (bop->left_hand->type == ST_LITERAL && bop->right_hand->type == ST_LITERAL) {
+			literal* a = &bop->left_hand->value_literal;
+			literal* b = &bop->right_hand->value_literal;
+			assert(a->type == SM_S32 || a->type == SM_U32);
+			assert(b->type == SM_S32 || b->type == SM_U32);
+			statement* new_st = malloc_statement(ST_LITERAL);
+			literal* new_lit = &new_st->value_literal;
+			new_lit->type = SM_S32;
+			if (bop->type == BO_ADD) {
+				new_lit->s32 = a->s32 + b->s32;
+			} else if (bop->type == BO_SUB) {
+				new_lit->s32 = a->s32 - b->s32;
+			} else if (bop->type == BO_MUL) {
+				new_lit->s32 = a->s32 * b->s32;
+			} else if (bop->type == BO_DIV) {
+				new_lit->s32 = a->s32 / b->s32;
+			} else {
+				assert(0 && "unexpected bo type!");
+			}
+			return new_st;
+		}
+	} else if (st->type == ST_UNARY_OP) {
+		unary_op* uop = &st->value_unary_op;
+		statement* new_operand = solve_constant_expressions_recursive(uop->operand);
+		if (new_operand) {
+			free(uop->operand);
+			uop->operand = new_operand;
+		}
+
+		if (uop->operand->type == ST_LITERAL) {
+			literal* l = &uop->operand->value_literal;
+			assert(l->type == SM_S32 || l->type == SM_U32);
+			if (uop->type == UO_NEGATIVE) {
+				l->s32 = -l->s32;
+				return uop->operand;
+			} else if (uop->type == UO_POSITIVE) {
+				return uop->operand;
+			}
+		}
+	}
+
+	return 0;
+}
+
+void solve_constant_expressions(scope* global_scope) {
+	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
+		if (global_scope->statements[i]->type == ST_FN_DEFINITION) {
+			scope* fn_scope = global_scope->statements[i]->value_fn_decl.scope;
+			if (!fn_scope) {
+				continue;
+			}
+
+			for (u32 j = 0; j < stb_arr_len(fn_scope->statements); ++j) {
+				statement* new_st = solve_constant_expressions_recursive(fn_scope->statements[j]);
+				if (new_st) {
+					free(fn_scope->statements[j]);
+					fn_scope->statements[j] = new_st;
+				}
+			}
+		}
+	}
+}
+
 /******************************LLVM IR GEN*****************************/
 
 char* llvm_ir_type(type_signature* t) {
@@ -1290,7 +1371,6 @@ int main(int argc, char** argv) {
 	printf("#endif\n");
 #endif
 
-#if 1
 	scope* global_scope = malloc_scope();
 	parse_ctx pctx = { .tokens = tokens, .at = tokens };
 	statement* st = parse(&pctx);
@@ -1298,28 +1378,23 @@ int main(int argc, char** argv) {
 		stb_arr_push(global_scope->statements, st);
 		st = parse(&pctx);
 	}
-#endif
 
-#if 1
 	sym_table* global_sym_table = build_symbol_table(global_scope->statements);
 	global_scope->sym_table = global_sym_table;
 	patch_symbol_pointers(global_scope);
 	resolve_statement_types(global_scope);
-#endif
 
-#if 0
-	print_symbol_table(global_sym_table, 0);
-#endif
+	/* print_symbol_table(global_sym_table, 0); */
 
-#if 0
 	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
 		print_ast(global_scope->statements[i], false);
 	}
-#endif
+	solve_constant_expressions(global_scope);
+	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
+		print_ast(global_scope->statements[i], false);
+	}
 
-#if 1
-	generate_llvm_ir(global_scope);
-#endif
+	/* generate_llvm_ir(global_scope); */
 
 	return 0;
 }
