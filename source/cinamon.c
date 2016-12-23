@@ -75,6 +75,7 @@ typedef u32 b32;
 	META_ENUM_MEMBER(ST_BINARY_OP,		"binary operator") \
 	META_ENUM_MEMBER(ST_UNARY_OP,		"unary operator") \
 	META_ENUM_MEMBER(ST_VOID,			"void") \
+	META_ENUM_MEMBER(ST_SCOPE,			"scope") \
 	META_ENUM_MEMBER(ST_UNKNOWN,		"unknown")
 
 #define META_BINARY_OP_TYPE_MEMBERS \
@@ -385,14 +386,9 @@ typedef struct fn_signature {
 } fn_signature;
 
 typedef struct {
-	struct statement** statements;
-	struct sym_table* sym_table;
-} scope;
-
-typedef struct {
 	string name;
 	fn_signature signature;
-	scope* scope;
+	struct statement* scope;
 	struct symbol* symbol;
 } fn_definition;
 
@@ -427,30 +423,26 @@ typedef struct {
 	};
 } literal;
 
+typedef struct scope {
+	struct sym_table* symbols_table;
+	struct statement** statements;
+} scope;
+
 typedef struct statement {
 	STATEMENT_TYPE type;
 	type_signature resulting_type;
 
 	union {
 		literal value_literal;
-
 		var_definition value_var_decl;
-
 		fn_definition value_fn_decl;
 		fn_call value_fn_call;
-
 		binary_op value_binary_op;
 		unary_op value_unary_op;
-
 		identifier value_identifier;
+		scope value_scope;
 	};
 } statement;
-
-scope* malloc_scope() {
-	scope* result = malloc(sizeof(scope));
-	*result = (scope){0};
-	return result;
-}
 
 statement* malloc_statement(STATEMENT_TYPE type) {
 	statement* result = malloc(sizeof(statement));
@@ -705,6 +697,21 @@ statement* parse_fn_statement(parse_ctx* ctx) {
 	return st;
 }
 
+statement* parse_scope(parse_ctx* ctx) {
+	require_token(ctx, TK_LBRACE);
+	statement* st = malloc_statement(ST_SCOPE);
+	scope* scope = &st->value_scope;
+    token tk = peek_token(ctx, 0);
+    while (tk.type != TK_RBRACE) {
+        statement* fn_st = parse_fn_statement(ctx);
+        stb_arr_push(scope->statements, fn_st);
+        tk = peek_token(ctx, 0);
+    }
+	require_token(ctx, TK_RBRACE);
+
+	return st;
+}
+
 statement* parse_fn_declaration(parse_ctx* ctx) {
 	token id = require_token(ctx, TK_IDENTIFIER);
 	statement* st = malloc_statement(ST_FN_DEFINITION);
@@ -725,15 +732,10 @@ statement* parse_fn_declaration(parse_ctx* ctx) {
 	}
 
 	// TODO: parse declarations of foreign functions
-	require_token(ctx, TK_LBRACE);
-	fn->scope = malloc_scope();
-    tk = peek_token(ctx, 0);
-    while (tk.type != TK_RBRACE) {
-        statement* fn_st = parse_fn_statement(ctx);
-        stb_arr_push(fn->scope->statements, fn_st);
-        tk = peek_token(ctx, 0);
-    }
-	require_token(ctx, TK_RBRACE);
+	tk = peek_token(ctx, 0);
+	if (tk.type == TK_LBRACE) {
+		fn->scope = parse_scope(ctx);
+	}
 
 	return st;
 }
@@ -809,15 +811,18 @@ void print_ast(statement* root, b32 print_statement_resulting_types) {
 			}
 		}
 		if (f->scope) {
-			printf("{");
-			for (u32 i = 0; i < stb_arr_len(f->scope->statements); ++i) {
-				printf("\n\t");
-				print_ast(f->scope->statements[i], print_statement_resulting_types);
-			}
-			printf("\n}\n");
+			print_ast(f->scope, print_statement_resulting_types);
 		} else {
 			printf(";\n");
 		}
+	} else if (root->type == ST_SCOPE) {
+			printf("{");
+			scope* scope = &root->value_scope;
+			for (u32 i = 0; i < stb_arr_len(scope->statements); ++i) {
+				printf("\n\t");
+				print_ast(scope->statements[i], print_statement_resulting_types);
+			}
+			printf("\n}\n");
 	} else if (root->type == ST_FN_CALL) {
 		fn_call* f = &root->value_fn_call;
 		print_ast(f->fn_statement, print_statement_resulting_types);
@@ -914,7 +919,22 @@ sym_table* malloc_sym_table() {
 }
 
 void build_symbol_table_recursive(statement* node, sym_table* current_table, sym_table* global_table, b32 is_current_table_global) {
-	if (node->type == ST_FN_DEFINITION) {
+	if (node->type == ST_SCOPE) {
+		scope* scope = &node->value_scope;
+		sym_table* child_table = malloc_sym_table();
+		scope->symbols_table = child_table;
+		if (!global_table) {
+			assert(!current_table);
+			current_table = global_table = child_table;
+			is_current_table_global = true;
+		} else {
+			is_current_table_global = false;
+		}
+		for (u32 i = 0; i < stb_arr_len(scope->statements); ++i) {
+			build_symbol_table_recursive(scope->statements[i], child_table, global_table, is_current_table_global);
+		}
+		stb_arr_push(current_table->children, child_table);
+	} else if (node->type == ST_FN_DEFINITION) {
 		symbol* sym = malloc_symbol(SM_FN);
 		// functions can always be used before they are defined
 		sym->is_defined = true;
@@ -925,13 +945,7 @@ void build_symbol_table_recursive(statement* node, sym_table* current_table, sym
 		stb_arr_push(current_table->symbols, sym);
 
 		if (fn->scope) {
-			sym_table* child_table = malloc_sym_table();
-			fn->scope->sym_table = child_table;
-			child_table->name = sym->name;
-			for (u32 i = 0; i < stb_arr_len(fn->scope->statements); ++i) {
-				build_symbol_table_recursive(fn->scope->statements[i], child_table, global_table, false);
-			}
-			stb_arr_push(current_table->children, child_table);
+			build_symbol_table_recursive(fn->scope, current_table, global_table, is_current_table_global);
 		}
 	} else if (node->type == ST_VAR_DEFINITION) {
 		var_definition* var = &node->value_var_decl;
@@ -963,13 +977,9 @@ void build_symbol_table_recursive(statement* node, sym_table* current_table, sym
 	}
 }
 
-sym_table* build_symbol_table(statement** ast_root_nodes) {
-	sym_table* result = malloc_sym_table();
-	result->name = cstring_2_string("global");
-	for (u32 i = 0; i < stb_arr_len(ast_root_nodes); ++i) {
-		build_symbol_table_recursive(ast_root_nodes[i], result, result, true);
-	}
-	return result;
+void build_symbol_table(statement* ast_root) {
+	assert(ast_root->type == ST_SCOPE);
+	build_symbol_table_recursive(ast_root, 0, 0, true);
 }
 
 void print_indent(s32 indent, b32 insert_new_line) {
@@ -993,7 +1003,7 @@ void print_type(type_signature* type) {
 	}
 }
 
-print_symbol_table(sym_table* s, u32 indent) {
+void print_symbol_table(sym_table* s, u32 indent) {
 	print_indent(indent, false);
 	printf("%.*s {", s->name.len, s->name.at);
 	for (u32 i = 0; i < stb_arr_len(s->symbols); ++i) {
@@ -1028,7 +1038,14 @@ b32 are_strings_equal(string a, string b) {
 
 // TODO: rewrite this bit after making scopes into just a type of statement
 void patch_symbol_pointers_recursive(statement* st, sym_table** sym_table_stack) {
-	if (st->type == ST_BINARY_OP) {
+	if (st->type == ST_SCOPE) {
+		scope* scope = &st->value_scope;
+		stb_arr_push(sym_table_stack, scope->symbols_table);
+		for (u32 i = 0; i < stb_arr_len(scope->statements); ++i) {
+			patch_symbol_pointers_recursive(scope->statements[i], sym_table_stack);
+		}
+		stb_arr_pop(sym_table_stack);
+	} else if (st->type == ST_BINARY_OP) {
 		patch_symbol_pointers_recursive(st->value_binary_op.left_hand, sym_table_stack);
 		patch_symbol_pointers_recursive(st->value_binary_op.right_hand, sym_table_stack);
 	} else if (st->type == ST_UNARY_OP) {
@@ -1058,30 +1075,21 @@ void patch_symbol_pointers_recursive(statement* st, sym_table** sym_table_stack)
 	}
 }
 
-void patch_symbol_pointers(scope* global_scope) {
+void patch_symbol_pointers(statement* ast_root) {
+	assert(ast_root->type == ST_SCOPE);
 	sym_table** sym_table_stack = 0;
-	stb_arr_push(sym_table_stack, global_scope->sym_table);
-	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
-		statement* s = global_scope->statements[i];
-		if (s->type == ST_FN_DEFINITION) {
-			fn_definition* fn = &s->value_fn_decl;
-			if (!fn->scope) {
-				continue;
-			}
-
-			stb_arr_push(sym_table_stack, fn->scope->sym_table);
-			for (u32 j = 0; j < stb_arr_len(fn->scope->statements); ++j) {
-				patch_symbol_pointers_recursive(fn->scope->statements[j], sym_table_stack);
-			}
-			stb_arr_pop(sym_table_stack);
-		}
-	}
+	patch_symbol_pointers_recursive(ast_root, sym_table_stack);
 }
 
 /************************RESOLVE STATEMENT TYPES************************/
 
-SYMBOL_TYPE resolve_statement_types_recursive(statement* st) {
-	if (st->type == ST_LITERAL) {
+SYMBOL_TYPE resolve_statement_types(statement* st) {
+	if (st->type == ST_SCOPE) {
+		scope* scope = &st->value_scope;
+		for (u32 i = 0; i < stb_arr_len(scope->statements); ++i) {
+			resolve_statement_types(scope->statements[i]);
+		}
+	} else if (st->type == ST_LITERAL) {
 		literal* l = &st->value_literal;
 		st->resulting_type.type = l->type;
 		return l->type;
@@ -1093,29 +1101,38 @@ SYMBOL_TYPE resolve_statement_types_recursive(statement* st) {
 			st->resulting_type = s->type;
 		}
 		return st->resulting_type.type;
-	} else if (st->type == ST_FN_DEFINITION && st->value_fn_decl.symbol) { // NOTE: this does not work cause of the shitty way I handle scopes now
-		st->resulting_type = st->value_fn_decl.symbol->type;
-		return st->resulting_type.type;
+	} else if (st->type == ST_FN_DEFINITION) {
+		fn_definition* fn = &st->value_fn_decl;
+		SYMBOL_TYPE type = SM_VOID;
+		if (fn->symbol) {
+			st->resulting_type = st->value_fn_decl.symbol->type;
+			type = st->resulting_type.type;
+		}
+		if (fn->scope) {
+			resolve_statement_types(fn->scope);
+		}
+		
+		return type;
 	} else if (st->type == ST_FN_CALL) {
 		fn_call* fc = &st->value_fn_call;
 		for (u32 i = 0; i < stb_arr_len(fc->parameters); ++i) {
-			resolve_statement_types_recursive(fc->parameters[i]);
+			resolve_statement_types(fc->parameters[i]);
 		}
-		SYMBOL_TYPE type = resolve_statement_types_recursive(fc->fn_statement);
+		SYMBOL_TYPE type = resolve_statement_types(fc->fn_statement);
 		st->resulting_type.type = type;
 		return type;
 	} else if (st->type == ST_VAR_DEFINITION) {
 		return st->value_var_decl.type.type;
 	} else if (st->type == ST_BINARY_OP) {
 		// TODO: actual logic, not this dumb shit
-		SYMBOL_TYPE left_type = resolve_statement_types_recursive(st->value_binary_op.left_hand);
-		SYMBOL_TYPE right_type = resolve_statement_types_recursive(st->value_binary_op.right_hand);
+		SYMBOL_TYPE left_type = resolve_statement_types(st->value_binary_op.left_hand);
+		SYMBOL_TYPE right_type = resolve_statement_types(st->value_binary_op.right_hand);
 		assert(left_type == right_type);
 		st->resulting_type.type = left_type;
 		return left_type;
 	} else if (st->type == ST_UNARY_OP) {
 		// TODO: same as binary op
-		SYMBOL_TYPE type = resolve_statement_types_recursive(st->value_unary_op.operand);
+		SYMBOL_TYPE type = resolve_statement_types(st->value_unary_op.operand);
 		st->resulting_type.type = type;
 		return type;
 	}
@@ -1123,30 +1140,25 @@ SYMBOL_TYPE resolve_statement_types_recursive(statement* st) {
 	return SM_VOID;
 }
 
-void resolve_statement_types(scope* global_scope) {
-	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
-		if (global_scope->statements[i]->type == ST_FN_DEFINITION) {
-			scope* fn_scope = global_scope->statements[i]->value_fn_decl.scope;
-			if (!fn_scope) {
-				continue;
-			}
-
-			for (u32 j = 0; j < stb_arr_len(fn_scope->statements); ++j) {
-				resolve_statement_types_recursive(fn_scope->statements[j]);
-			}
+statement* solve_constant_expressions(statement* st) {
+	if (st->type == ST_SCOPE) {
+		scope* scope = &st->value_scope;
+		for (u32 i = 0; i < stb_arr_len(scope->statements); ++i) {
+			solve_constant_expressions(scope->statements[i]);
 		}
-	}
-}
-
-statement* solve_constant_expressions_recursive(statement* st) {
-	if (st->type == ST_BINARY_OP) {
+	} else if (st->type == ST_FN_DEFINITION) {
+		fn_definition* fn = &st->value_fn_decl;
+		if (fn->scope) {
+			solve_constant_expressions(fn->scope);
+		}
+	} else if (st->type == ST_BINARY_OP) {
 		binary_op* bop = &st->value_binary_op;
-		statement* new_lh = solve_constant_expressions_recursive(bop->left_hand);
+		statement* new_lh = solve_constant_expressions(bop->left_hand);
 		if (new_lh) {
 			free(bop->left_hand);
 			bop->left_hand = new_lh;
 		}
-		statement* new_rh = solve_constant_expressions_recursive(bop->right_hand);
+		statement* new_rh = solve_constant_expressions(bop->right_hand);
 		if (new_rh) {
 			free(bop->right_hand);
 			bop->right_hand = new_rh;
@@ -1179,7 +1191,7 @@ statement* solve_constant_expressions_recursive(statement* st) {
 		}
 	} else if (st->type == ST_UNARY_OP) {
 		unary_op* uop = &st->value_unary_op;
-		statement* new_operand = solve_constant_expressions_recursive(uop->operand);
+		statement* new_operand = solve_constant_expressions(uop->operand);
 		if (new_operand) {
 			free(uop->operand);
 			uop->operand = new_operand;
@@ -1198,25 +1210,6 @@ statement* solve_constant_expressions_recursive(statement* st) {
 	}
 
 	return 0;
-}
-
-void solve_constant_expressions(scope* global_scope) {
-	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
-		if (global_scope->statements[i]->type == ST_FN_DEFINITION) {
-			scope* fn_scope = global_scope->statements[i]->value_fn_decl.scope;
-			if (!fn_scope) {
-				continue;
-			}
-
-			for (u32 j = 0; j < stb_arr_len(fn_scope->statements); ++j) {
-				statement* new_st = solve_constant_expressions_recursive(fn_scope->statements[j]);
-				if (new_st) {
-					free(fn_scope->statements[j]);
-					fn_scope->statements[j] = new_st;
-				}
-			}
-		}
-	}
 }
 
 /******************************LLVM IR GEN*****************************/
@@ -1268,7 +1261,31 @@ typedef struct {
 } ssa_gen_ctx;
 
 u32 llvm_ir_statement(statement* st, ssa_gen_ctx* ctx, u32 indent) {
-	if (st->type == ST_LITERAL) {
+	if (st->type == ST_SCOPE) {
+		// TODO: what to do with free scopes actually?
+		scope* scope = &st->value_scope;
+		for (u32 i = 0; i < stb_arr_len(scope->statements); ++i) {
+			llvm_ir_statement(scope->statements[i], ctx, indent);
+		}
+	}
+	if (st->type == ST_FN_DEFINITION) {
+		fn_definition* fn = &st->value_fn_decl;
+		printf("define %s", llvm_ir_type(&fn->signature.return_type));
+		printf(" @%.*s(", fn->name.len, fn->name.at);
+		// TODO: generate ir for arguments
+		printf(")");
+		if (!fn->scope) {
+			printf(";\n");
+		} else {
+			printf(" {");
+			ssa_gen_ctx new_ssa_ctx = {0};
+			llvm_ir_statement(fn->scope, &new_ssa_ctx, indent + 1);
+			if (fn->signature.return_type.type == SM_VOID) {
+				printf("\n\tret void");
+			}
+			printf("\n}\n");
+		}
+	} else if (st->type == ST_LITERAL) {
 		literal* l = &st->value_literal;
 		if (l->type == SM_S32 || l->type == SM_U32) {
 			u32 reg = ctx->registers_used++;
@@ -1305,33 +1322,14 @@ u32 llvm_ir_statement(statement* st, ssa_gen_ctx* ctx, u32 indent) {
 	return 0xFFFFFFFF;
 }
 
-void generate_llvm_ir(scope* global_scope_ast)
+void generate_llvm_ir(statement* ast_root)
 {
 	printf(
 			"; ModuleID = 'test.cn'\n"
 			"source_filename = \"test.cn\"\n"
 			"declare i32 @printf(i8*, ...)\n\n");
 
-	for (u32 i = 0; i < stb_arr_len(global_scope_ast->statements); ++i) {
-		statement* s = global_scope_ast->statements[i];
-		if (s->type == ST_FN_DEFINITION) {
-			fn_definition* fn = &s->value_fn_decl;
-			printf("define %s", llvm_ir_type(&fn->signature.return_type));
-			printf(" @%.*s(", fn->name.len, fn->name.at);
-			// TODO: generate ir for arguments
-			printf(")");
-			printf(" {");
-			ssa_gen_ctx ssa_ctx = {0};
-			for (u32 j = 0; j < stb_arr_len(fn->scope->statements); ++j) {
-				statement* st = fn->scope->statements[j];
-				llvm_ir_statement(st, &ssa_ctx, 1);
-			}
-			if (fn->signature.return_type.type == SM_VOID) {
-				printf("\n\tret void");
-			}
-			printf("\n}\n");
-		}
-	}
+	llvm_ir_statement(ast_root, 0, 0);
 }
 
 /*********************************MAIN*********************************/
@@ -1371,30 +1369,25 @@ int main(int argc, char** argv) {
 	printf("#endif\n");
 #endif
 
-	scope* global_scope = malloc_scope();
+	statement* ast_root = malloc_statement(ST_SCOPE);
 	parse_ctx pctx = { .tokens = tokens, .at = tokens };
 	statement* st = parse(&pctx);
 	while (st) {
-		stb_arr_push(global_scope->statements, st);
+		stb_arr_push(ast_root->value_scope.statements, st);
 		st = parse(&pctx);
 	}
 
-	sym_table* global_sym_table = build_symbol_table(global_scope->statements);
-	global_scope->sym_table = global_sym_table;
-	patch_symbol_pointers(global_scope);
-	resolve_statement_types(global_scope);
+	build_symbol_table(ast_root);
+	patch_symbol_pointers(ast_root);
+	resolve_statement_types(ast_root);
 
 	/* print_symbol_table(global_sym_table, 0); */
 
-	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
-		print_ast(global_scope->statements[i], false);
-	}
-	solve_constant_expressions(global_scope);
-	for (u32 i = 0; i < stb_arr_len(global_scope->statements); ++i) {
-		print_ast(global_scope->statements[i], false);
-	}
+	print_ast(ast_root, false);
+	solve_constant_expressions(ast_root);
+	print_ast(ast_root, false);
 
-	/* generate_llvm_ir(global_scope); */
+	generate_llvm_ir(ast_root);
 
 	return 0;
 }
